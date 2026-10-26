@@ -1,0 +1,10 @@
+{
+  "description": "Visualize and analyze university course schedules with conflict detection, filtering, and room/time recommendations for optimized semester planning.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

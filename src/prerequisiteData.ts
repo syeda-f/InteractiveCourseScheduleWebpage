@@ -1,0 +1,32 @@
+export type PrerequisitePair = { course: string; prerequisite: string };
+
+// Course prerequisite relationships from the supplied Prerequisite_Conflicts workbook.
+export const prerequisitePairs: PrerequisitePair[] = [
+  {"course":"Artificial Intelligence","prerequisite":"Algorithms"},
+  {"course":"Cloud Computing","prerequisite":"Computer Organization"},
+  {"course":"Computer Vision","prerequisite":"Linear Algebra and Differential Equations"},
+  {"course":"Database Administration","prerequisite":"Operating Systems"},
+  {"course":"Digital Signal Processing","prerequisite":"Digital and Logic Design"},
+  {"course":"Distributed Systems and Algorithms","prerequisite":"Algorithms"},
+  {"course":"Distributed Systems and Algorithms","prerequisite":"Operating Systems"},
+  {"course":"E-Commerce","prerequisite":"Database I"},
+  {"course":"Embedded Systems","prerequisite":"Operating Systems"},
+  {"course":"ICS/SCADA Security Essentials","prerequisite":"Scripting Languages"},
+  {"course":"Information Security and Assurance","prerequisite":"Operating Systems"},
+  {"course":"Information Security and Assurance","prerequisite":"Network Security"},
+  {"course":"Introduction to Project Management","prerequisite":"Principles of Software Engineering"},
+  {"course":"Network Administration","prerequisite":"Operating Systems"},
+  {"course":"Operating Systems","prerequisite":"Computer Organization"},
+  {"course":"Operating Systems","prerequisite":"Systems Programming"},
+  {"course":"Parallel Computing","prerequisite":"Algorithms"},
+  {"course":"Programming Languages","prerequisite":"Systems Programming"},
+  {"course":"Robotics","prerequisite":"Linear Algebra and Differential Equations"},
+  {"course":"Robotics","prerequisite":"Electronics"},
+  {"course":"Software Architecture and Design","prerequisite":"Requirements Engineering"},
+  {"course":"System Security","prerequisite":"Operating Systems"},
+  {"course":"Systems Administration","prerequisite":"Operating Systems"},
+  {"course":"Theory of Computation","prerequisite":"Algorithms"},
+  {"course":"Theory of Computation","prerequisite":"Linear Algebra and Differential Equations"},
+  {"course":"Vulnerability and Penetration Testing","prerequisite":"Scripting Languages"},
+  {"course":"Web Application Penetration Testing","prerequisite":"Scripting Languages"},
+];
