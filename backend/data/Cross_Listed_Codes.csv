@@ -1,0 +1,31 @@
+final_course_code,course_title,COSC,SOEN,AINT,ITAP,CSEC,COEN
+COSC 3351,Algorithms,COSC 3351,SOEN 3351,AINT 3351,,,
+COSC 4376,Bioinformatics,COSC 4376,,AINT 4376,,,
+ITAP 4315,Cloud Computing,,SOEN 4315,,ITAP 4315,,COEN 4398
+COSC 4371,Computer Graphics,COSC 4371,,AINT 4371,,,
+COEN 3361,Computer Networks,COSC 3361,SOEN 3361,AINT 3361,,,COEN 3361
+AINT 4373,Computer Vision,COSC 4373,,AINT 4373,,,
+COSC 3332,Discrete Structures and Combinatorial Analysis,COSC 3332,SOEN 2332,AINT 3332,,,
+COSC 4372,Distributed Systems in Algorithms,COSC 4372,,AINT 4372,,,
+SOEN 4371,E-Commerce,,SOEN 4371,,ITAP 4371,,
+SOEN 3314,Formal Methods in Software Engineering,COSC 4352,SOEN 3314,,,,
+CSEC 3354,Introduction to Cryptography,COSC 3354,,AINT 3354,,CSEC 3354,
+COSC 3357,Logic and Formal Verification,COSC 3357,,AINT 3357,,,
+ITAP 4362,Network Administration,,,,ITAP 4362,CSEC 4377,
+ITAP 2431,Network Management,,,,ITAP 2431,CSEC 2431,
+ITAP 2431,Network Management LAB,,,,ITAP 2431,CSEC 2431,
+CSEC 3431,Network Security,,,,ITAP 3431,CSEC 3431,
+CSEC 3431,Network Security LAB,,,,ITAP 3431,CSEC 3431,
+COSC 4361,Operating Systems,COSC 4361,SOEN 4361,AINT 4361,ITAP 4361,CSEC 4361,COEN 4361
+COSC 4365,Parallel Computing,COSC 4365,,AINT 4311,,,
+COSC 4461,Programming Languages,COSC 4461,SOEN 4461,,,,
+COSC 4461,Programming Languages LAB,COSC 4461,SOEN 4461,,,,
+COSC 4380,Quantum Information and Computation,COSC 4380,,AINT 4380,,,
+ITAP 4376,Secure E-Commerce,ITAP 4376,,,,CSEC 4376,
+SOEN 4313,Software Project Management,,SOEN 4313,,ITAP 4316,,
+SOEN 4312,Software Testing and Quality Assurance,,SOEN 4312,,ITAP 3315,,
+COSC 4393,Special Topics I Machine Learn,COSC 4393,,,ITAP 4393,,COEN 4393
+ITAP 3411,Systems Programming,COSC 3411,,,ITAP 3411,,
+ITAP 3411,Systems Programming LAB,COSC 3411,,,ITAP 3411,,
+SOEN 2312,Web Programming,COSC 2312,SOEN 2312,,ITAP 2312,,
+SOEN 2312,Web Programming LAB,COSC 2312,SOEN 2312,,ITAP 2312,,

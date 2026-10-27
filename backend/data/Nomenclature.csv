@@ -1,0 +1,42 @@
+course_code,original_course_title,unified_course_title
+GEIT 1411,Computer Science |,Computer Science I
+GEIT 1411,Computer Science | LAB,Computer Science I LAB
+GEIT 1412,Computer Science ||,Computer Science II
+GEIT 1412,Computer Science || LAB,Computer Science II LAB
+SOEN 2332,Disc Struc & Combinatorial Ana,Discrete Structures and Combinatorial Analysis
+COSC 3332,Discrete Str. & Com. Ana,Discrete Structures and Combinatorial Analysis
+AINT 3332,Discrete Structures & Combi An,Discrete Structures and Combinatorial Analysis
+COEN 3421,Electronics |,Electronics I
+COEN 3421,Electronics | Lab,Electronics I LAB
+COEN 4413,Embedded systems,Embedded Systems
+COEN 4413,Embedded systems LAB,Embedded Systems LAB
+ITAP 3383,Enterprise Res. Planning Sys.,Enterprise Resource Planning Systems
+CSEC 3354,Intro. to Cryptography,Introduction to Cryptography
+ITAP 1311,Intro. to Information Techno.,Introduction to Information Technology
+AINT 3411,Intro. to Machine Learning,Introduction to Machine Learning
+AINT 3411,Intro. to Machine Learning LAB,Introduction to Machine Learning LAB
+ITAP 4316,Intro. to Project Management,Software Project Management
+ASSE 4311,Learning Outcome Asse. III AI,Learning Outcome Assessment III AINT
+ASSE 4311,Learning Outcome Asse. III COE,Learning Outcome Assessment III COEN
+ASSE 4311,Learning Outcome Asse. III CS,Learning Outcome Assessment III COSC
+ASSE 4311,Learning Outcome Asse. III IT,Learning Outcome Assessment III ITAP
+ASSE 4311,Learning Outcome Asse. III SE,Learning Outcome Assessment III SOEN
+ASSE 4311,Learning Outcome Asse.III COE,Learning Outcome Assessment III COEN
+ASSE 4311,Learning Outcome Asse.III COEN,Learning Outcome Assessment III COEN
+ASSE 4311,Learning Outcome Asse.III CS,Learning Outcome Assessment III COSC
+ASSE 4311,Learning Outcome Asse.III CSEC,Learning Outcome Assessment III CSEC
+ASSE 4311,Learning Outcome Asse.III SOEN,Learning Outcome Assessment III SOEN
+MATH 3433,Linear Algebra&Diff. Equations,Linear Algebra and Differential Equations
+GEIT 2331,Math. Reasoning &Alg. Thinking,Mathematical Reasoning and Algorithmic Thinking
+ITAP 3362,Mobile Apps. Design and Dev.,Mobile Applications Design and Development
+SOEN 4461,Prgramming Languages,Programming Languages
+SOEN 4461,Prgramming Languages LAB,Programming Languages LAB
+GEIT 3351,Principles of Software Eng'g,Principles of Software Engineering
+MATH 2313,Probability & Statistics,Probability and Statistics
+SOEN 4311,Software Arch. & Design,Software Architecture and Design
+SOEN 4312,Software Testing & Qual Assu.,Software Testing and Quality Assurance
+ITAP 3315,Software Testing and QA,Software Testing and Quality Assurance
+AINT 4393,Spc Top: Natural Lang Procesin,Special Topics I Natural Language Processing
+COEN 4393,Special Topics I Machine Learn,Special Topics I Machine Learn
+COEN 4398,Special Topics:Cloud Computing,Cloud Computing
+CSEC 4363,Web App. Penetration Testing,Web Application Penetration Testing
