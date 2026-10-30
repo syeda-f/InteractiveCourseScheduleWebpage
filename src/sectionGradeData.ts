@@ -1,7 +1,7 @@
 import type { Campus, Grade } from "./gradeData";
 
 export type SectionGradeRecord = {
-  semester: "202510";
+  semester: string;
   department: string;
   course: string;
   section: string;

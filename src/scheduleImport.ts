@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { prerequisitePairs } from "./prerequisiteData";
+import { ccesCourseCatalog } from "./courseCatalogData";
 
 export type Campus = "Female" | "Male";
 export type ConflictType = "room" | "instructor" | "course" | "capacity" | "prerequisite";
@@ -23,6 +24,7 @@ export type ScheduleCourse = {
   status: "Open" | "Closed";
   session: string;
   conflicts: ConflictType[];
+  conflictDetails?: string[];
 };
 
 export type CrossListedGroup = {
@@ -64,6 +66,12 @@ function getCollege(department: string): ScheduleCourse["college"] {
   return "CSHS";
 }
 
+function getAsseCollege(title: string): ScheduleCourse["college"] {
+  if (/\bCOBA\b/i.test(title)) return "COBA";
+  if (/\bLAW\b/i.test(title)) return "COL";
+  return "CCES";
+}
+
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -81,7 +89,7 @@ function parseTime(value: unknown) {
   return [toMinutes(match[1]), toMinutes(match[2])] as const;
 }
 
-function normalizeCourseTitle(value: string) {
+export function normalizeCourseTitle(value: string) {
   return value
     .toLowerCase()
     .replace(/\blab(oratory)?\b/g, "")
@@ -89,8 +97,25 @@ function normalizeCourseTitle(value: string) {
     .replace(/\bdiff\b/g, "differential")
     .replace(/\beng'?g\b/g, "engineering")
     .replace(/\bassu\b/g, "assurance")
+    .replace(/\basse\b/g, "assessment")
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]/g, "");
+}
+
+const catalogTitlesByCode = new Map<string, string[]>();
+ccesCourseCatalog.forEach((item) => {
+  catalogTitlesByCode.set(item.code, [...(catalogTitlesByCode.get(item.code) ?? []), item.title]);
+});
+
+export function canonicalCourseTitle(code: string, title: string) {
+  const options = catalogTitlesByCode.get(code);
+  if (!options?.length) return title;
+  if (options.length === 1) return options[0];
+  const normalized = normalizeCourseTitle(title);
+  return options.find((option) => {
+    const candidate = normalizeCourseTitle(option);
+    return candidate === normalized || candidate.includes(normalized) || normalized.includes(candidate);
+  }) ?? title;
 }
 
 const normalizedPrerequisites = prerequisitePairs.map((pair) => ({
@@ -118,6 +143,14 @@ function roomCapacityMap(courses: ScheduleCourse[]) {
   return capacities;
 }
 
+function hasAssignedInstructor(course: ScheduleCourse) {
+  return !["", "Unassigned", "NAME NOT FOUND FOR PIDM:"].includes(course.instructor);
+}
+
+function hasPhysicalRoom(course: ScheduleCourse) {
+  return course.room !== "-" && !/\bONLINE\b/i.test(course.room);
+}
+
 export function inferRoomCapacity(courses: ScheduleCourse[], course: ScheduleCourse) {
   return roomCapacityMap(courses).get(`${course.gender}|${course.room}`) ?? course.maxEnrollment;
 }
@@ -140,7 +173,8 @@ export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
     if (!days.length) return [];
 
     const campusCode = String(record["CAMP CODE"] ?? "");
-    const name = String(record["COURSE Title"] ?? "").trim();
+    const sourceName = String(record["COURSE Title"] ?? "").trim();
+    const name = canonicalCourseTitle(code, sourceName);
     const available = numberValue(record.AVAIL);
     const department = code.split(" ")[0];
 
@@ -149,7 +183,7 @@ export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
       code,
       section: cleanIdentifier(record["SEQUENCE NUMBER"]),
       name,
-      college: getCollege(department),
+      college: department === "ASSE" ? getAsseCollege(name) : getCollege(department),
       instructor: String(record.Instructor || "Unassigned").trim(),
       room: String(record.ROOM || "-").trim(),
       roomType: /\b(lab|laboratory|studio|clinical|practicum|workshop)\b/i.test(name) ? "Lab" as const : "Lecture" as const,
@@ -163,6 +197,7 @@ export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
       status: available > 0 ? "Open" as const : "Closed" as const,
       session: String(record.SESSION_CODE || "D"),
       conflicts: [] as ConflictType[],
+      conflictDetails: [],
     }];
   });
 
@@ -173,7 +208,13 @@ export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
 }
 
 export function recalculateConflicts(courses: ScheduleCourse[]) {
-  const updated = courses.map((course) => ({ ...course, conflicts: [] as ConflictType[] }));
+  const updated = courses.map((course) => ({
+    ...course,
+    name: canonicalCourseTitle(course.code, course.name),
+    college: getCourseCollege(course),
+    conflicts: [] as ConflictType[],
+    conflictDetails: [] as string[],
+  }));
   const meetings = new Map<string, Array<[number, ScheduleCourse]>>();
 
   updated.forEach((course, index) => {
@@ -193,9 +234,9 @@ export function recalculateConflicts(courses: ScheduleCourse[]) {
         if (sameRecord) continue;
         const crossListed =
           first.code !== second.code &&
-          first.room !== "-" &&
+          hasPhysicalRoom(first) &&
           first.room === second.room &&
-          first.instructor !== "NAME NOT FOUND FOR PIDM:" &&
+          hasAssignedInstructor(first) &&
           first.instructor === second.instructor &&
           first.startMinute === second.startMinute &&
           first.endMinute === second.endMinute &&
@@ -204,13 +245,16 @@ export function recalculateConflicts(courses: ScheduleCourse[]) {
         if (crossListed) continue;
 
         const reasons: ConflictType[] = [];
-        if (first.code === second.code && first.section !== second.section) reasons.push("course");
-        if (first.instructor !== "NAME NOT FOUND FOR PIDM:" && first.instructor === second.instructor) reasons.push("instructor");
-        if (first.room !== "-" && first.room === second.room) reasons.push("room");
+        if (hasAssignedInstructor(first) && first.instructor === second.instructor) reasons.push("instructor");
+        if (hasPhysicalRoom(first) && first.room === second.room) reasons.push("room");
         if (isPrerequisitePair(first, second)) reasons.push("prerequisite");
         reasons.forEach((reason) => {
           if (!first.conflicts.includes(reason)) first.conflicts.push(reason);
           if (!second.conflicts.includes(reason)) second.conflicts.push(reason);
+          const firstDetail = `${reason}: ${second.code} · Section ${second.section}`;
+          const secondDetail = `${reason}: ${first.code} · Section ${first.section}`;
+          if (!first.conflictDetails?.includes(firstDetail)) first.conflictDetails?.push(firstDetail);
+          if (!second.conflictDetails?.includes(secondDetail)) second.conflictDetails?.push(secondDetail);
         });
       }
     });
@@ -219,15 +263,89 @@ export function recalculateConflicts(courses: ScheduleCourse[]) {
   const roomCapacities = roomCapacityMap(updated);
   updated.forEach((course) => {
     const roomCapacity = roomCapacities.get(`${course.gender}|${course.room}`) ?? course.maxEnrollment;
-    if (course.enrolled > roomCapacity) course.conflicts.push("capacity");
+    if (course.enrolled > roomCapacity) {
+      course.conflicts.push("capacity");
+      course.conflictDetails?.push(`capacity: ${course.enrolled} enrolled / ${roomCapacity} inferred seats`);
+    }
   });
   return updated;
+}
+
+function getCourseCollege(course: ScheduleCourse): ScheduleCourse["college"] {
+  const department = course.code.split(" ")[0];
+  return department === "ASSE" ? getAsseCollege(course.name) : getCollege(department);
+}
+
+const CROSS_LISTED_CODES_BY_TITLE: Record<string, string> = {
+  algorithms: "COSC 3351",
+  bioinformatics: "COSC 4376",
+  cloudcomputing: "ITAP 4315",
+  computergraphics: "COSC 4371",
+  computernetworks: "COEN 3361",
+  computervision: "AINT 4373",
+  discretestructuresandcombinatorialanalysis: "COSC 3332",
+  distributedsystemsinalgorithms: "COSC 4372",
+  ecommerce: "SOEN 4371",
+  formalmethodsinsoftwareengineering: "SOEN 3314",
+  introductiontocryptography: "CSEC 3354",
+  logicandformalverification: "COSC 3357",
+  networkadministration: "ITAP 4362",
+  networkmanagement: "ITAP 2431",
+  networkmanagementlab: "ITAP 2431",
+  networksecurity: "CSEC 3431",
+  networksecuritylab: "CSEC 3431",
+  operatingsystems: "COSC 4361",
+  parallelcomputing: "COSC 4365",
+  programminglanguages: "COSC 4461",
+  programminglanguageslab: "COSC 4461",
+  quantuminformationandcomputation: "COSC 4380",
+  secureecommerce: "ITAP 4376",
+  softwareprojectmanagement: "SOEN 4313",
+  softwaretestingandqualityassurance: "SOEN 4312",
+  specialtopicsimachinelearn: "COSC 4393",
+  systemsprogramming: "ITAP 3411",
+  systemsprogramminglab: "ITAP 3411",
+  webprogramming: "SOEN 2312",
+  webprogramminglab: "SOEN 2312",
+};
+
+export function mergeCrossListedCourses(courses: ScheduleCourse[]) {
+  const grouped = new Map<string, ScheduleCourse[]>();
+  courses.forEach((course) => {
+    const key = [
+      course.gender,
+      course.section,
+      normalizeCourseTitle(course.name),
+      [...course.days].sort().join(","),
+      course.startMinute,
+      course.endMinute,
+      course.room,
+      course.instructor,
+    ].join("|");
+    grouped.set(key, [...(grouped.get(key) ?? []), course]);
+  });
+  return [...grouped.values()].map((records) => {
+    if (records.length === 1) return records[0];
+    const first = records[0];
+    const normalizedTitle = normalizeCourseTitle(first.name);
+    return {
+      ...first,
+      id: records.map((record) => record.id).join(" / "),
+      code: CROSS_LISTED_CODES_BY_TITLE[normalizedTitle] ?? first.code,
+      maxEnrollment: records.reduce((sum, record) => sum + record.maxEnrollment, 0),
+      enrolled: records.reduce((sum, record) => sum + record.enrolled, 0),
+      available: records.reduce((sum, record) => sum + record.available, 0),
+      status: records.some((record) => record.status === "Open") ? "Open" as const : "Closed" as const,
+      conflicts: [...new Set(records.flatMap((record) => record.conflicts))],
+      conflictDetails: [...new Set(records.flatMap((record) => record.conflictDetails ?? []))],
+    };
+  });
 }
 
 export function findCrossListedGroups(courses: ScheduleCourse[]): CrossListedGroup[] {
   const grouped = new Map<string, ScheduleCourse[]>();
   courses.forEach((course) => {
-    if (course.room === "-" || course.instructor === "NAME NOT FOUND FOR PIDM:") return;
+    if (!hasPhysicalRoom(course) || !hasAssignedInstructor(course)) return;
     const key = [
       course.gender,
       [...course.days].sort().join(","),
