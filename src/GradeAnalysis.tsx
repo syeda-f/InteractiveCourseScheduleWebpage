@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { type Grade, type GradeRecord } from "./gradeData";
 import { sectionGradeData, type SectionGradeRecord } from "./sectionGradeData";
@@ -30,7 +30,7 @@ const highGrades = (record: GradeRecord) => record.grades["A+"] + record.grades.
 const passingGrades = (record: GradeRecord) => record.grades["A+"] + record.grades.A + record.grades["B+"] + record.grades.B + record.grades["C+"] + record.grades.C + record.grades.P + record.grades["D+"];
 const passingRate = (record: GradeRecord) => percent(passingGrades(record), record);
 const campusName = (record: GradeRecord) => record.campus.replace(" Campus", "");
-const cohortKey = (record: GradeRecord | SectionGradeRecord) => `${record.course}|${record.title}|${record.campus}|${"section" in record ? record.section : ""}`;
+const cohortKey = (record: GradeRecord | SectionGradeRecord) => `${record.course}|${record.title}|${record.campus}|${"section" in record ? record.section : ""}|${"instructor" in record ? record.instructor : ""}`;
 const campusColor = (record: GradeRecord) => record.campus === "Male Campus" ? sectionColors[0] : sectionColors[1];
 const chartSeriesColor = (record: ChartSeries) => {
   if (!record.section) return campusColor(record);
@@ -40,122 +40,45 @@ const chartSeriesColor = (record: ChartSeries) => {
   const lightness = 36 + ((hash >> 9) % 28);
   return `hsl(${hue} ${saturation}% ${lightness}%)`;
 };
-const sectionKey = (record: SectionGradeRecord) => `${record.campus}|${record.course}|${record.section}`;
+const sectionKey = (record: SectionGradeRecord) => `${record.campus}|${record.course}|${record.section}|${record.instructor}`;
 const sectionLabel = (record: SectionGradeRecord) => `Section ${record.section} · ${record.campus.replace(" Campus", "")}`;
-const chartSeriesKey = (record: ChartSeries) => `${record.course}|${record.campus}|${record.section ?? ""}|${record.instructor ?? ""}`;
-const normalizeHeading = (value: unknown) => String(value ?? "").toLowerCase().replace(/[^a-z0-9+]/g, "");
-const normalizeTitle = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
-const canonicalCrossListedCodes: Record<string, string> = {
-  operatingsystems: "COSC 4361",
-  systemsprogramming: "ITAP 3411",
-  cloudcomputing: "ITAP 4315",
-  ecommerce: "SOEN 4371",
-  algorithms: "COSC 3351",
-  computernetworks: "COEN 3361",
-  webprogramming: "SOEN 2312",
-  programminglanguages: "COSC 4461",
-  networksecurity: "CSEC 3431",
-  networkmanagement: "ITAP 2431",
-};
+const chartSeriesKey = (record: ChartSeries, index: number) => `${record.course}|${record.campus}|${record.section ?? ""}|${record.instructor ?? ""}|${index}`;
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 
-function parseGradeDataset(file: File, data: ArrayBuffer): SectionGradeRecord[] {
-  const workbook = XLSX.read(data, { type: "array" });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "" });
-  const headerIndex = rows.findIndex((row) => row.some((cell) => {
-    const heading = normalizeHeading(cell);
-    return heading === "coursecode" || heading === "course";
-  }));
-  if (headerIndex < 0) throw new Error("The file does not contain a recognizable course header.");
-  const headers = rows[headerIndex].map(normalizeHeading);
-  const find = (...aliases: string[]) => headers.findIndex((header) => aliases.includes(header));
-  const prefixIndex = find("coursecode", "department", "prefix");
-  const courseIndex = find("course", "coursenumber", "courseno");
-  const sectionIndex = find("section", "sectionno", "sectionnumber");
-  const titleIndex = find("coursetitle", "title");
-  const instructorIndex = find("instructorname", "instructor");
-  const totalIndex = find("totalnoofstudents", "totalstudents", "students", "total");
-  const campusIndex = find("campus");
-  const semesterIndex = find("semester", "term", "termcode");
-  const gradeIndexes: Record<Grade, number> = {
-    "A+": find("a+"),
-    A: find("a"),
-    "B+": find("b+"),
-    B: find("b"),
-    "C+": find("c+"),
-    C: find("c"),
-    P: find("p"),
-    "D+": find("d+"),
-    "D&Below": find("d&below", "dbelow", "dandbelow", "df"),
-    W: find("w", "withdrawra", "withdrawal", "withdrawals"),
+type BackendGradeRow = Record<string, unknown>;
+
+function backendToSection(record: BackendGradeRow): SectionGradeRecord {
+  const string = (key: string) => String(record[key] ?? "").trim();
+  const number = (key: string) => Number(record[key] ?? 0) || 0;
+  const course = string("course_code");
+  const campusValue = string("campus").toLowerCase();
+  const campus = campusValue.startsWith("f") ? "Female Campus" : "Male Campus";
+  return {
+    semester: string("term_code") || "202510",
+    department: course.split(/\s+/)[0] || string("department"),
+    course,
+    section: string("section_number"),
+    title: string("course_title"),
+    instructor: string("instructor") || "Unassigned",
+    campus,
+    totalStudents: number("total_students"),
+    grades: {
+      "A+": number("A+"), A: number("A"), "B+": number("B+"),
+      B: number("B"), "C+": number("C+"), C: number("C"),
+      P: number("P"), "D+": number("D+"),
+      "D&Below": number("D&Below"), W: number("withdraw_count"),
+    },
   };
-  if (prefixIndex < 0 || sectionIndex < 0 || titleIndex < 0) {
-    throw new Error("The file is missing required course, section, or title columns.");
-  }
-  const numberValue = (value: unknown) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  const filenameCampus = /female/i.test(file.name) ? "Female Campus" : /male/i.test(file.name) ? "Male Campus" : null;
-  const records = rows.slice(headerIndex + 1).flatMap((row) => {
-    const prefixValue = String(row[prefixIndex] ?? "").trim();
-    const courseValue = courseIndex >= 0 ? String(row[courseIndex] ?? "").trim() : "";
-    const course = /\d/.test(prefixValue) ? prefixValue : `${prefixValue} ${courseValue}`.trim();
-    const section = String(row[sectionIndex] ?? "").trim();
-    const title = String(row[titleIndex] ?? "").trim();
-    if (!course || !section || !title || !/\d/.test(course)) return [];
-    const grades = Object.fromEntries(allGrades.map((grade) => [
-      grade,
-      gradeIndexes[grade] >= 0 ? numberValue(row[gradeIndexes[grade]]) : 0,
-    ])) as Record<Grade, number>;
-    const campusValue = campusIndex >= 0 ? String(row[campusIndex] ?? "") : "";
-    const campus = /female|^f$/i.test(campusValue)
-      ? "Female Campus"
-      : /male|^m$/i.test(campusValue)
-        ? "Male Campus"
-        : filenameCampus ?? (section.startsWith("2") ? "Female Campus" : "Male Campus");
-    const department = course.split(/\s+/)[0];
-    const gradeTotal = allGrades.reduce((sum, grade) => sum + grades[grade], 0);
-    return [{
-      semester: semesterIndex >= 0 ? String(row[semesterIndex] || "202510") : "202510",
-      department,
-      course,
-      section,
-      title,
-      instructor: instructorIndex >= 0 ? String(row[instructorIndex] || "Unassigned").trim() : "Unassigned",
-      campus,
-      totalStudents: totalIndex >= 0 ? numberValue(row[totalIndex]) : gradeTotal,
-      grades,
-    } satisfies SectionGradeRecord];
-  });
-  if (!records.length) throw new Error("No grade-distribution records were found in this file.");
-  return records;
 }
 
-function mergeCrossListedGradeRecords(records: SectionGradeRecord[]) {
-  const groups = new Map<string, SectionGradeRecord[]>();
-  records.forEach((record) => {
-    const key = [record.semester, record.campus, record.section, normalizeTitle(record.title), record.instructor.toLowerCase()].join("|");
-    groups.set(key, [...(groups.get(key) ?? []), record]);
-  });
-  let mergedGroups = 0;
-  const merged = [...groups.values()].flatMap((group) => {
-    if (new Set(group.map((record) => record.course)).size < 2) return group;
-    mergedGroups += 1;
-    const first = group[0];
-    const code = canonicalCrossListedCodes[normalizeTitle(first.title)] ?? [...group.map((record) => record.course)].sort()[0];
-    return [{
-      ...first,
-      department: code.split(" ")[0],
-      course: code,
-      totalStudents: group.reduce((sum, record) => sum + record.totalStudents, 0),
-      grades: Object.fromEntries(allGrades.map((grade) => [
-        grade,
-        group.reduce((sum, record) => sum + record.grades[grade], 0),
-      ])) as Record<Grade, number>,
-    }];
-  });
-  return { records: merged, mergedGroups };
+async function requestGradeSections(merged: boolean): Promise<SectionGradeRecord[]> {
+  const response = await fetch(`${API_BASE}/api/grades?merge=${merged}&record_type=section`);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail ?? `Unable to load grades (${response.status}).`);
+  }
+  const rows: BackendGradeRow[] = await response.json();
+  return rows.map(backendToSection);
 }
 
 const downloadBlob = (blob: Blob, filename: string) => {
@@ -347,7 +270,8 @@ export default function GradeAnalysis() {
   const [sortAsc, setSortAsc] = useState(true);
   const [isMerging, setIsMerging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [hasMergedDataset, setHasMergedDataset] = useState(false);
+  const [mergeEnabled, setMergeEnabled] = useState(false);
+
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -358,58 +282,82 @@ export default function GradeAnalysis() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
   };
 
+  const applyRecords = (records: SectionGradeRecord[]) => {
+    setGradeRecords(records);
+    setSelectedSections([]);
+    setExpandedCohort(null);
+    setReportGenerated(false);
+    setFilters((current) => ({
+      ...current,
+      semester: records[0]?.semester ?? current.semester,
+      department: "All",
+      course: "All",
+      instructor: "All",
+      campus: "All",
+    }));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    requestGradeSections(false)
+      .then((records) => {
+        if (cancelled) return;
+        applyRecords(records);
+      })
+      .catch(() => {
+        // Keep the bundled example dataset until files are imported.
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const handleMergeCrossListed = async () => {
-    if (isMerging) return;
+    if (isMerging || isImporting) return;
     setIsMerging(true);
+    const next = !mergeEnabled;
     try {
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      if (hasMergedDataset) {
-        showToast("info", "No cross-listed courses found.");
-        return;
-      }
-      const result = mergeCrossListedGradeRecords(gradeRecords);
-      if (!result.mergedGroups) {
-        showToast("info", "No cross-listed courses found.");
-        return;
-      }
-      setGradeRecords(result.records);
-      setHasMergedDataset(true);
-      setSelectedSections([]);
-      setReportGenerated(false);
-      setFilters((current) => ({
-        ...current,
-        course: result.records.some((record) => record.course === current.course) ? current.course : "All",
-        instructor: "All",
-      }));
-      showToast("success", "Cross-listed courses merged successfully.");
-    } catch {
-      showToast("error", "Unable to merge cross-listed courses.");
+      const records = await requestGradeSections(next);
+      applyRecords(records);
+      setMergeEnabled(next);
+      showToast("success", next ? "Merged cross-listed view enabled." : "Original course view restored.");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Unable to load grade data.");
     } finally {
       setIsMerging(false);
     }
   };
 
-  const handleGradeImport = async (file?: File) => {
-    if (!file || isImporting) return;
+  const handleGradeImport = async (files?: FileList | null) => {
+    if (!files || isImporting) return;
     setIsImporting(true);
     try {
-      const records = parseGradeDataset(file, await file.arrayBuffer());
-      setGradeRecords(records);
-      setHasMergedDataset(false);
-      setSelectedSections([]);
-      setExpandedCohort(null);
-      setReportGenerated(false);
-      setFilters((current) => ({
-        ...current,
-        semester: records[0].semester,
-        department: "All",
-        course: "All",
-        instructor: "All",
-        campus: "All",
-      }));
-      showToast("success", `${records.length} grade records imported successfully.`);
+      const selected = Array.from(files);
+      if (selected.length !== 3) {
+        throw new Error("Select exactly three CSV files: male sections, female sections, and combined course grades.");
+      }
+      if (selected.some((file) => !file.name.toLowerCase().endsWith(".csv"))) {
+        throw new Error("The grade ETL currently accepts CSV files only.");
+      }
+      const male = selected.find((file) => /male/i.test(file.name) && !/female/i.test(file.name));
+      const female = selected.find((file) => /female/i.test(file.name));
+      const courses = selected.find((file) => file !== male && file !== female);
+      if (!male || !female || !courses) {
+        throw new Error("Include filenames containing 'Male' and 'Female', plus the combined course grades CSV.");
+      }
+      const form = new FormData();
+      form.append("male", male);
+      form.append("female", female);
+      form.append("courses", courses);
+      const response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(typeof error.detail === "string" ? error.detail : "Grade import failed.");
+      }
+      const records = await requestGradeSections(false);
+      applyRecords(records);
+      setMergeEnabled(false);
+      showToast("success", `${records.length} grade sections imported and processed successfully.`);
     } catch (error) {
-      showToast("error", error instanceof Error ? error.message : "Unable to import the grade distribution file.");
+      showToast("error", error instanceof Error ? error.message : "Unable to import grade files.");
     } finally {
       setIsImporting(false);
       if (importInputRef.current) importInputRef.current.value = "";
@@ -466,7 +414,15 @@ export default function GradeAnalysis() {
     return section.totalStudents >= minimumStudents && value >= riskThreshold;
   }).length;
   const chartSeries = useMemo<ChartSeries[]>(() => {
-    return [...sections]
+    // Apply the active filters explicitly to the chart as well as the summary.
+    // This prevents unrelated courses from appearing in the legend.
+    return sections.filter((record) =>
+      record.semester === filters.semester &&
+      (filters.department === "All" || record.department === filters.department) &&
+      (filters.course === "All" || record.course === filters.course) &&
+      (filters.instructor === "All" || record.instructor === filters.instructor) &&
+      (filters.campus === "All" || record.campus.startsWith(filters.campus))
+    )
       .sort((a, b) => Number(a.campus.startsWith("Female")) - Number(b.campus.startsWith("Female")) || a.section.localeCompare(b.section, undefined, { numeric: true }))
       .map((record) => ({
         ...record,
@@ -475,7 +431,7 @@ export default function GradeAnalysis() {
         section: record.section,
         instructor: record.instructor,
       }));
-  }, [sections]);
+  }, [sections, filters.semester, filters.department, filters.course, filters.instructor, filters.campus]);
   const chartCampusGroups = useMemo(() => (["Male Campus", "Female Campus"] as const)
     .map((campus) => ({ campus, series: chartSeries.filter((item) => item.campus === campus) }))
     .filter((group) => group.series.length), [chartSeries]);
@@ -734,14 +690,15 @@ export default function GradeAnalysis() {
         <div className="grade-hero-buttons">
           <button className="grade-button grade-button--secondary grade-merge-action" disabled={isMerging || isImporting} onClick={() => void handleMergeCrossListed()}>
             {isMerging ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="sections" />}
-            {isMerging ? "Merging…" : "Merge Cross-Listed Courses"}
+            {isMerging ? "Loading…" : mergeEnabled ? "Show Original Courses" : "Merge Cross-Listed Courses"}
           </button>
           <input
             ref={importInputRef}
             className="sr-only"
             type="file"
-            accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-            onChange={(event) => void handleGradeImport(event.target.files?.[0])}
+            accept=".csv,text/csv"
+            multiple
+            onChange={(event) => void handleGradeImport(event.target.files)}
           />
           <button className="grade-button grade-button--primary" disabled={isImporting || isMerging} onClick={() => importInputRef.current?.click()}>
             {isImporting ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="upload" />}
@@ -769,7 +726,7 @@ export default function GradeAnalysis() {
       </section>
 
       <section className="grade-panel grade-chart-card">
-        <div className="grade-card-heading"><div><h2>Grade Distribution Across Letter Grades</h2><p>Stacked distribution for {sections.length} filtered {sections.length === 1 ? "section" : "sections"} and {studentTotal.toLocaleString()} students across {filters.campus === "All" ? "Male and Female campuses" : `${filters.campus} Campus`} on the {filters.mode} scale.</p></div><div className="grade-chart-actions"><div className="grade-chart-campus-filter"><span>Campus</span><div className="grade-segment">{["All", "Male", "Female"].map((campus) => <button className={filters.campus === campus ? "active" : ""} onClick={() => { setReportGenerated(false); setFilters((current) => ({ ...current, campus })); }} key={campus}>{campus}</button>)}</div></div><MetricToggle mode={filters.mode} onChange={(mode) => setFilters((current) => ({ ...current, mode }))} /><div className="grade-chart-legend grade-chart-legend--grouped">{chartCampusGroups.map((group) => <div className={`grade-chart-legend__campus grade-chart-legend__campus--${group.campus.startsWith("Male") ? "male" : "female"}`} key={group.campus}><strong>{group.campus}</strong><div>{group.series.map((section) => <span key={chartSeriesKey(section)}><i style={{ background: chartSeriesColor(section) }} /><span className="grade-chart-legend__details"><b>{section.section ? `Section ${section.section}` : section.label}</b><small>{section.instructor ? `${section.instructor} · ` : ""}{section.totalStudents.toLocaleString()} students</small></span></span>)}</div></div>)}</div></div></div>
+        <div className="grade-card-heading"><div><h2>Grade Distribution Across Letter Grades</h2><p>Stacked distribution for {sections.length} filtered {sections.length === 1 ? "section" : "sections"} and {studentTotal.toLocaleString()} students across {filters.campus === "All" ? "Male and Female campuses" : `${filters.campus} Campus`} on the {filters.mode} scale.</p></div><div className="grade-chart-actions"><div className="grade-chart-campus-filter"><span>Campus</span><div className="grade-segment">{["All", "Male", "Female"].map((campus) => <button className={filters.campus === campus ? "active" : ""} onClick={() => { setReportGenerated(false); setFilters((current) => ({ ...current, campus })); }} key={campus}>{campus}</button>)}</div></div><MetricToggle mode={filters.mode} onChange={(mode) => setFilters((current) => ({ ...current, mode }))} /><div className="grade-chart-legend grade-chart-legend--grouped">{chartCampusGroups.map((group) => <div className={`grade-chart-legend__campus grade-chart-legend__campus--${group.campus.startsWith("Male") ? "male" : "female"}`} key={group.campus}><strong>{group.campus}</strong><div>{group.series.map((section, index) => <span key={chartSeriesKey(section, index)}><i style={{ background: chartSeriesColor(section) }} /><span className="grade-chart-legend__details"><b>{section.section ? `Section ${section.section}` : section.label}</b><small>{section.instructor ? `${section.instructor} · ` : ""}{section.totalStudents.toLocaleString()} students</small></span></span>)}</div></div>)}</div></div></div>
         <div className="grade-chart-wrap">
           <span className="grade-y-label">{filters.mode}</span>
           <div className="grade-y-axis">{[4, 3, 2, 1, 0].map((step) => <span key={step}>{filters.mode === "Percentage" ? `${Math.round(maxPercentage * step / 4)}%` : Math.ceil(maxCount * step / 4)}</span>)}</div>
@@ -778,12 +735,12 @@ export default function GradeAnalysis() {
               <div className="grade-group" key={grade}>
                 <div className="grade-bars grade-bars--stacked">
                   <div className="grade-stack">
-                  {chartSeries.map((section) => {
+                  {chartSeries.map((section, index) => {
                       const count = section.grades[grade];
                       const pct = studentTotal ? count / studentTotal * 100 : 0;
                       const chartValue = filters.mode === "Percentage" ? pct / maxPercentage : count / maxCount;
                       const displayValue = filters.mode === "Percentage" ? `${pct.toFixed(1)}%` : count.toLocaleString();
-                      return <div className={`grade-bar grade-bar--stacked grade-bar--${section.campus.startsWith("Male") ? "male" : "female"}`} key={chartSeriesKey(section)} style={{ height: `${Math.max(count ? 1 : 0, chartValue * 100)}%`, background: chartSeriesColor(section) }} tabIndex={0}><span className="grade-stack-value">{displayValue}</span><GradeTooltip record={section} grade={grade as Exclude<Grade, "P">} seriesLabel={section.label} instructor={section.instructor} selectionTotal={studentTotal} /></div>;
+                      return <div className={`grade-bar grade-bar--stacked grade-bar--${section.campus.startsWith("Male") ? "male" : "female"}`} key={chartSeriesKey(section, index)} style={{ height: `${Math.max(count ? 1 : 0, chartValue * 100)}%`, background: chartSeriesColor(section) }} tabIndex={0}><span className="grade-stack-value">{displayValue}</span><GradeTooltip record={section} grade={grade as Exclude<Grade, "P">} seriesLabel={section.label} instructor={section.instructor} selectionTotal={studentTotal} /></div>;
                     })}
                   </div>
                 </div>
@@ -796,7 +753,7 @@ export default function GradeAnalysis() {
       </section>
 
       <section className="grade-panel grade-table-card">
-        <div className="grade-card-heading"><div><h2>Course, Campus &amp; Section Breakdown</h2><p>Full section workbook data with counts and percentages for key grade outcomes</p></div><span className="grade-table-count">{sections.length} section records</span></div>
+        <div className="grade-card-heading"><div><h2>Course, Campus &amp; Section Breakdown</h2><p>Full section workbook data with counts and percentages for key grade outcomes</p></div><span className="grade-table-count">{chartSeries.length} section records</span></div>
         <div className="grade-table-scroll"><table><thead><tr>
           <th><button onClick={() => toggleSort("department")}>Department {sortKey === "department" ? (sortAsc ? "↑" : "↓") : ""}</button></th>
           <th><button onClick={() => toggleSort("course")}>Course {sortKey === "course" ? (sortAsc ? "↑" : "↓") : ""}</button></th>
@@ -805,7 +762,7 @@ export default function GradeAnalysis() {
           <th>Section</th><th>Instructor</th>
           <th><button onClick={() => toggleSort("total")}>Total {sortKey === "total" ? (sortAsc ? "↑" : "↓") : ""}</button></th>
           {(["A+", "A", "D+", "D&Below", "W"] as Grade[]).map((grade) => <th key={grade}>{grade === "D&Below" ? "D & F" : grade} Count / Percentage</th>)}<th>Record Chart</th>
-        </tr></thead><tbody>{sections.map((section) => { const key = cohortKey(section); const expanded = expandedCohort === key; return <Fragment key={key}><tr><td>{section.department}</td><td><strong>{section.course}</strong></td><td>{section.title}</td><td><span className={`grade-campus grade-campus--${section.campus.startsWith("Male") ? "male" : "female"}`}>{section.campus}</span></td><td><strong>{section.section}</strong></td><td>{section.instructor}</td><td><strong>{total(section)}</strong></td>{(["A+", "A", "D+", "D&Below", "W"] as Grade[]).map((grade) => <td key={grade}><strong>{section.grades[grade]}</strong><span>{percent(section.grades[grade], section).toFixed(1)}%</span></td>)}<td><button className={`grade-chart-toggle ${expanded ? "active" : ""}`} onClick={() => setExpandedCohort(expanded ? null : key)}><MiniIcon name="chart" />{expanded ? "Hide chart" : "View chart"}</button></td></tr>{expanded && <tr className="grade-expanded-row"><td colSpan={13}><CohortChart initialRecord={section} initialMode={filters.mode} /></td></tr>}</Fragment>; })}</tbody></table></div>
+        </tr></thead><tbody key={`${filters.semester}|${filters.department}|${filters.course}|${filters.instructor}|${filters.campus}|${selectedSections.join(",")}|${mergeEnabled}`}>{chartSeries.map((section, rowIndex) => { const key = cohortKey(section); const expanded = expandedCohort === key; return <Fragment key={`${key}|${rowIndex}`}><tr><td>{section.department}</td><td><strong>{section.course}</strong></td><td>{section.title}</td><td><span className={`grade-campus grade-campus--${section.campus.startsWith("Male") ? "male" : "female"}`}>{section.campus}</span></td><td><strong>{section.section}</strong></td><td>{section.instructor}</td><td><strong>{total(section)}</strong></td>{(["A+", "A", "D+", "D&Below", "W"] as Grade[]).map((grade) => <td key={grade}><strong>{section.grades[grade]}</strong> <span>({percent(section.grades[grade], section).toFixed(1)}%)</span></td>)}<td><button className={`grade-chart-toggle ${expanded ? "active" : ""}`} onClick={() => setExpandedCohort(expanded ? null : key)}><MiniIcon name="chart" />{expanded ? "Hide chart" : "View chart"}</button></td></tr>{expanded && <tr className="grade-expanded-row"><td colSpan={13}><CohortChart initialRecord={section} initialMode={filters.mode} /></td></tr>}</Fragment>; })}</tbody></table></div>
       </section>
       </> : <>
       <section className="grade-report-hero grade-panel">
