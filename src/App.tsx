@@ -1,3 +1,5 @@
+
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import GradeAnalysis from "./GradeAnalysis";
@@ -709,7 +711,14 @@ export default function App() {
   const [numericCodes, setNumericCodes] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [showConflicts, setShowConflicts] = useState(true);
-  const [mergeCrossListed, setMergeCrossListed] = useState(false);
+  const [mergeCrossListed, setMergeCrossListed] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("gradeAnalysis.crossListedMerged") === "true"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem("gradeAnalysis.crossListedMerged", String(mergeCrossListed)); }
+    catch { /* Storage may be disabled. */ }
+  }, [mergeCrossListed]);
   const [showFilters, setShowFilters] = useState(true);
   const [showCourseConfig, setShowCourseConfig] = useState(false);
   const [configuredCourses, setConfiguredCourses] = useState<string[]>(() =>
@@ -1684,7 +1693,7 @@ export default function App() {
             </section>
           </>
         ) : activeTab === "grades" ? (
-          <GradeAnalysis />
+          <GradeAnalysis mergeEnabled={mergeCrossListed} onMergeChange={setMergeCrossListed} />
         ) : (
           /* ========================================================= */
           /* EXAM SCHEDULE VIEW                                        */

@@ -1,3 +1,5 @@
+
+
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { type Grade, type GradeRecord } from "./gradeData";
@@ -44,6 +46,7 @@ const sectionKey = (record: SectionGradeRecord) => `${record.campus}|${record.co
 const sectionLabel = (record: SectionGradeRecord) => `Section ${record.section} · ${record.campus.replace(" Campus", "")}`;
 const chartSeriesKey = (record: ChartSeries, index: number) => `${record.course}|${record.campus}|${record.section ?? ""}|${record.instructor ?? ""}|${index}`;
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const GRADE_MERGE_STORAGE_KEY = "gradeAnalysis.crossListedMerged";
 
 type BackendGradeRow = Record<string, unknown>;
 
@@ -270,7 +273,13 @@ export default function GradeAnalysis() {
   const [sortAsc, setSortAsc] = useState(true);
   const [isMerging, setIsMerging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [mergeEnabled, setMergeEnabled] = useState(false);
+  const [mergeEnabled, setMergeEnabled] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(GRADE_MERGE_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
 
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -299,7 +308,7 @@ export default function GradeAnalysis() {
 
   useEffect(() => {
     let cancelled = false;
-    requestGradeSections(false)
+    requestGradeSections(mergeEnabled)
       .then((records) => {
         if (cancelled) return;
         applyRecords(records);
@@ -318,6 +327,11 @@ export default function GradeAnalysis() {
       const records = await requestGradeSections(next);
       applyRecords(records);
       setMergeEnabled(next);
+      try {
+        window.localStorage.setItem(GRADE_MERGE_STORAGE_KEY, String(next));
+      } catch {
+        // The view still changes for this session if browser storage is unavailable.
+      }
       showToast("success", next ? "Merged cross-listed view enabled." : "Original course view restored.");
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to load grade data.");
@@ -352,9 +366,9 @@ export default function GradeAnalysis() {
         const error = await response.json().catch(() => ({}));
         throw new Error(typeof error.detail === "string" ? error.detail : "Grade import failed.");
       }
-      const records = await requestGradeSections(false);
+      // Preserve the user's selected cross-listed/original view after importing.
+      const records = await requestGradeSections(mergeEnabled);
       applyRecords(records);
-      setMergeEnabled(false);
       showToast("success", `${records.length} grade sections imported and processed successfully.`);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to import grade files.");
