@@ -155,10 +155,40 @@ export function inferRoomCapacity(courses: ScheduleCourse[], course: ScheduleCou
   return roomCapacityMap(courses).get(`${course.gender}|${course.room}`) ?? course.maxEnrollment;
 }
 
+/** Read TERM CODE from the actual workbook rows, never from a filename. */
+export async function detectScheduleSemester(file: File): Promise<string> {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const found = new Set<string>();
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "" });
+    const headerIndex = rows.findIndex((row) => row.some((cell) => String(cell).trim().toUpperCase() === "TERM CODE"));
+    if (headerIndex < 0) continue;
+    const column = rows[headerIndex].findIndex((cell) => String(cell).trim().toUpperCase() === "TERM CODE");
+    for (const row of rows.slice(headerIndex + 1)) {
+      const value = String(row[column] ?? "").trim().replace(/\.0$/, "");
+      if (/^\d{6}$/.test(value)) found.add(value);
+      else if (value && value.toUpperCase() !== "TERM CODE" && row.some((cell) => String(cell).trim())) {
+        throw new Error(`Invalid TERM CODE in ${file.name}: ${value}`);
+      }
+    }
+  }
+  if (found.size !== 1) {
+    throw new Error(found.size ? `Multiple semester codes found in ${file.name}: ${[...found].join(", ")}` : `No TERM CODE found in ${file.name}.`);
+  }
+  return [...found][0];
+}
+
 export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, defval: "" });
+  // Prefer the CCES worksheet when the workbook also includes a university-wide sheet.
+  const preferredName = workbook.SheetNames.find((name) => name.trim().toUpperCase() === "CCES");
+  const selectedName = preferredName ?? workbook.SheetNames.find((name) => {
+    const preview = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], { header: 1, defval: "", range: 0 });
+    return preview.some((row) => row.some((cell) => String(cell).trim().toUpperCase() === "COURSE CODE"));
+  });
+  if (!selectedName) throw new Error("No worksheet with a COURSE CODE header was found.");
+  const selectedSheet = workbook.Sheets[selectedName];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(selectedSheet, { header: 1, defval: "" });
   const headerIndex = rows.findIndex((row) => row.some((value) => String(value).trim() === "COURSE CODE"));
   const dataRows = headerIndex >= 0 ? rows.slice(headerIndex + 1) : rows;
   const headers = headerIndex >= 0 ? rows[headerIndex].map(String) : COLUMNS;
@@ -309,10 +339,83 @@ const CROSS_LISTED_CODES_BY_TITLE: Record<string, string> = {
   webprogramminglab: "SOEN 2312",
 };
 
+// Canonical cross-listed codes from Cross_Listed_Codes.csv.
+const CROSS_LISTED_CODE_MAP: Record<string, string> = {
+  "COSC 3351": "COSC 3351",
+  "SOEN 3351": "COSC 3351",
+  "AINT 3351": "COSC 3351",
+  "COSC 4376": "COSC 4376",
+  "AINT 4376": "COSC 4376",
+  "SOEN 4315": "ITAP 4315",
+  "ITAP 4315": "ITAP 4315",
+  "COEN 4398": "ITAP 4315",
+  "COSC 4371": "COSC 4371",
+  "AINT 4371": "COSC 4371",
+  "COSC 3361": "COEN 3361",
+  "SOEN 3361": "COEN 3361",
+  "AINT 3361": "COEN 3361",
+  "COEN 3361": "COEN 3361",
+  "COSC 4373": "AINT 4373",
+  "AINT 4373": "AINT 4373",
+  "COSC 3332": "COSC 3332",
+  "SOEN 2332": "COSC 3332",
+  "AINT 3332": "COSC 3332",
+  "COSC 4372": "COSC 4372",
+  "AINT 4372": "COSC 4372",
+  "SOEN 4371": "SOEN 4371",
+  "ITAP 4371": "SOEN 4371",
+  "COSC 4352": "SOEN 3314",
+  "SOEN 3314": "SOEN 3314",
+  "COSC 3354": "CSEC 3354",
+  "AINT 3354": "CSEC 3354",
+  "CSEC 3354": "CSEC 3354",
+  "COSC 3357": "COSC 3357",
+  "AINT 3357": "COSC 3357",
+  "ITAP 4362": "ITAP 4362",
+  "CSEC 4377": "ITAP 4362",
+  "ITAP 2431": "ITAP 2431",
+  "CSEC 2431": "ITAP 2431",
+  "ITAP 3431": "CSEC 3431",
+  "CSEC 3431": "CSEC 3431",
+  "COSC 4361": "COSC 4361",
+  "SOEN 4361": "COSC 4361",
+  "AINT 4361": "COSC 4361",
+  "ITAP 4361": "COSC 4361",
+  "CSEC 4361": "COSC 4361",
+  "COEN 4361": "COSC 4361",
+  "COSC 4365": "COSC 4365",
+  "AINT 4311": "COSC 4365",
+  "COSC 4461": "COSC 4461",
+  "SOEN 4461": "COSC 4461",
+  "COSC 4380": "COSC 4380",
+  "AINT 4380": "COSC 4380",
+  "ITAP 4376": "ITAP 4376",
+  "CSEC 4376": "ITAP 4376",
+  "SOEN 4313": "SOEN 4313",
+  "ITAP 4316": "SOEN 4313",
+  "SOEN 4312": "SOEN 4312",
+  "ITAP 3315": "SOEN 4312",
+  "COSC 4393": "COSC 4393",
+  "ITAP 4393": "COSC 4393",
+  "COEN 4393": "COSC 4393",
+  "COSC 3411": "ITAP 3411",
+  "ITAP 3411": "ITAP 3411",
+  "COSC 2312": "SOEN 2312",
+  "SOEN 2312": "SOEN 2312",
+  "ITAP 2312": "SOEN 2312"
+};
+
+export function canonicalScheduleCode(code: string): string {
+  const normalized = code.trim().toUpperCase().replace(/\s+/g, " ");
+  return CROSS_LISTED_CODE_MAP[normalized] ?? code;
+}
+
 export function mergeCrossListedCourses(courses: ScheduleCourse[]) {
   const grouped = new Map<string, ScheduleCourse[]>();
-  courses.forEach((course) => {
+  courses.forEach((originalCourse) => {
+    const course = { ...originalCourse, code: canonicalScheduleCode(originalCourse.code) };
     const key = [
+      course.code,
       course.gender,
       course.section,
       normalizeCourseTitle(course.name),
@@ -325,13 +428,17 @@ export function mergeCrossListedCourses(courses: ScheduleCourse[]) {
     grouped.set(key, [...(grouped.get(key) ?? []), course]);
   });
   return [...grouped.values()].map((records) => {
-    if (records.length === 1) return records[0];
     const first = records[0];
     const normalizedTitle = normalizeCourseTitle(first.name);
+    // Even a single section may have an old cross-listed prefix.
+    // Normalize its code so dropdown filters and schedule display agree.
+    if (records.length === 1) {
+      return first;
+    }
     return {
       ...first,
       id: records.map((record) => record.id).join(" / "),
-      code: CROSS_LISTED_CODES_BY_TITLE[normalizedTitle] ?? first.code,
+      code: first.code,
       maxEnrollment: records.reduce((sum, record) => sum + record.maxEnrollment, 0),
       enrolled: records.reduce((sum, record) => sum + record.enrolled, 0),
       available: records.reduce((sum, record) => sum + record.available, 0),

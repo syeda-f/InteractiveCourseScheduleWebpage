@@ -57,7 +57,7 @@ def calculate_percentages(df):
     return df
 
 
-def clean_data(df):
+def clean_data(df, term_code="202510"):
     df = df.copy().dropna(how='all')
     df = df[df['department'].notna() & df['course_number'].notna()].copy()
     for column in df.select_dtypes(include='object').columns:
@@ -69,7 +69,7 @@ def clean_data(df):
         df['section_number'] = df['section_number'].str.replace(r'\.0$', '', regex=True)
     df['course_code'] = df['department'] + ' ' + df['course_number']
     df['original_course_code'] = df['course_code']
-    df['term_code'] = '202510'
+    df['term_code'] = term_code
     df['campus'] = df['campus'].str.title()
 
     # Source reports sometimes leave the P count blank.
@@ -86,14 +86,14 @@ def clean_data(df):
     return calculate_percentages(df)
 
 
-def transform_general(male_df, female_df, courses_df):
+def transform_general(male_df, female_df, courses_df, term_code="202510"):
     male = male_df[list(SECTION_COLUMNS)].rename(columns=SECTION_COLUMNS).copy()
     female = female_df[list(SECTION_COLUMNS)].rename(columns=SECTION_COLUMNS).copy()
     male['campus'] = 'Male'
     female['campus'] = 'Female'
     sections = pd.concat([male, female], ignore_index=True)
     courses = courses_df[list(COURSE_COLUMNS)].rename(columns=COURSE_COLUMNS)
-    return clean_data(sections), clean_data(courses)
+    return clean_data(sections, term_code), clean_data(courses, term_code)
 
 
 def build_mapping(merge_file=MERGE_FILE):
@@ -138,7 +138,7 @@ def transform_merge(sections_df, courses_df, merge_file=MERGE_FILE):
     return sections_merged, courses_merged
 
 
-def load(sections_original, sections_merged, courses_original, courses_merged):
+def load(sections_original, sections_merged, courses_original, courses_merged, term_code="202510"):
     # One CSV holds all four views. Filter by BOTH labels when reading it.
     datasets = []
     for record_type, merge_status, df in [
@@ -153,16 +153,18 @@ def load(sections_original, sections_merged, courses_original, courses_merged):
         datasets.append(view)
 
     final_df = pd.concat(datasets, ignore_index=True)
-    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-    output_file = OUTPUT_FOLDER / 'grades_processed.csv'
+    (OUTPUT_FOLDER / 'grades').mkdir(parents=True, exist_ok=True)
+    output_file = OUTPUT_FOLDER / 'grades' / f'grades_{term_code}.csv'
     final_df.to_csv(output_file, index=False)
     return output_file
 
 
 def run(male_file=MALE_FILE, female_file=FEMALE_FILE,
-        courses_file=COURSES_FILE, merge_file=MERGE_FILE):
+        courses_file=COURSES_FILE, merge_file=MERGE_FILE, term_code="202510"):
+    if not (term_code.isdigit() and len(term_code) == 6):
+        raise ValueError("Semester code must be exactly six digits")
     male_df, female_df, courses_df = extract(male_file, female_file, courses_file)
-    sections_original, courses_original = transform_general(male_df, female_df, courses_df)
+    sections_original, courses_original = transform_general(male_df, female_df, courses_df, term_code)
     sections_merged, courses_merged = transform_merge(
         sections_original, courses_original, merge_file
     )
@@ -173,7 +175,7 @@ def run(male_file=MALE_FILE, female_file=FEMALE_FILE,
             f'{column} total changed during merging'
         )
 
-    output_file = load(sections_original, sections_merged, courses_original, courses_merged)
+    output_file = load(sections_original, sections_merged, courses_original, courses_merged, term_code)
     print('Grade Distribution ETL completed successfully!')
     print('Original sections:', len(sections_original))
     print('Unified sections:', len(sections_merged))

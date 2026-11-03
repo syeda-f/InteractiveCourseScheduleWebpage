@@ -1,12 +1,10 @@
-
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import GradeAnalysis from "./GradeAnalysis";
 import { collegeProfessors } from "./collegeProfessors";
 import { CCES_MAJORS, ccesCourseCatalog, collegeCodeRules, type CcesMajor } from "./courseCatalogData";
 import { scheduleCourses } from "./scheduleData";
-import { canonicalCourseTitle, findCrossListedGroups, inferRoomCapacity, mergeCrossListedCourses, parseScheduleFile, recalculateConflicts, type Campus, type ConflictType, type ScheduleCourse } from "./scheduleImport";
+import { canonicalCourseTitle, canonicalScheduleCode, findCrossListedGroups, inferRoomCapacity, mergeCrossListedCourses, detectScheduleSemester, parseScheduleFile, recalculateConflicts, type Campus, type ConflictType, type ScheduleCourse } from "./scheduleImport";
 import {
   initialExams,
   type Exam,
@@ -58,7 +56,18 @@ const DAY_LABELS: Record<string, string> = {
   Thursday: "R",
 };
 
-const DATASET_HASHES_KEY = "schedule-uploaded-dataset-hashes";
+const SCHEDULE_API = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const SCHEDULE_SEMESTER_KEY = "schedule.selectedSemester";
+type ScheduleSemesterEntry = { semester: string; campuses: Campus[] };
+async function scheduleApi<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${SCHEDULE_API}${path}`, options);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(typeof payload.detail === "string" ? payload.detail : `Schedule request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
 const CCES_PREFIX_LEGEND = [
   { prefix: "AINT", label: "AINT" },
   { prefix: "COEN", label: "COEN" },
@@ -85,11 +94,6 @@ function getCcesColorPrefix(course: Course) {
   if (/\b(CS|COSC)\b/.test(title)) return "COSC";
   if (/\b(IT|ITAP)\b/.test(title)) return "ITAP";
   return "GEIT";
-}
-
-async function hashDataset(file: File) {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function courseBelongsToCollege(code: string, college: string, title = "") {
@@ -689,6 +693,41 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveView>("courses");
   const [courses, setCourses] = useState<ScheduleCourse[]>(() => recalculateConflicts(initialCourses));
   const [exams, setExams] = useState<Exam[]>(initialExams);
+  const [scheduleSemesters, setScheduleSemesters] = useState<ScheduleSemesterEntry[]>([]);
+  const [scheduleSemester, setScheduleSemester] = useState<string>(() => window.localStorage.getItem(SCHEDULE_SEMESTER_KEY) ?? "");
+  const [scheduleLoadError, setScheduleLoadError] = useState("");
+  const scheduleLoadId = useRef(0);
+  const selectScheduleSemester = (semester: string) => {
+    setScheduleSemester(semester);
+    window.localStorage.setItem(SCHEDULE_SEMESTER_KEY, semester);
+  };
+  useEffect(() => {
+    let cancelled = false;
+    scheduleApi<{ semesters: ScheduleSemesterEntry[] }>("/api/schedules/semesters")
+      .then(({ semesters }) => {
+        if (cancelled) return;
+        setScheduleSemesters(semesters);
+        setScheduleSemester((previous) => {
+          const selected = semesters.some((entry) => entry.semester === previous) ? previous : (semesters[0]?.semester ?? "");
+          if (selected) window.localStorage.setItem(SCHEDULE_SEMESTER_KEY, selected);
+          return selected;
+        });
+      })
+      .catch((error) => { if (!cancelled) setScheduleLoadError(error instanceof Error ? error.message : "Backend unavailable"); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!scheduleSemester) return;
+    const loadId = ++scheduleLoadId.current;
+    scheduleApi<{ records: ScheduleCourse[] }>(`/api/schedules?semester=${encodeURIComponent(scheduleSemester)}`)
+      .then(({ records }) => {
+        if (loadId !== scheduleLoadId.current) return;
+        setCourses(recalculateConflicts(records));
+        setScheduleLoadError("");
+        setSelectedCourse(null);
+      })
+      .catch((error) => { if (loadId === scheduleLoadId.current) setScheduleLoadError(error instanceof Error ? error.message : "Unable to load semester"); });
+  }, [scheduleSemester]);
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const savedTheme = window.localStorage.getItem("schedule-theme");
@@ -718,6 +757,11 @@ export default function App() {
   useEffect(() => {
     try { window.localStorage.setItem("gradeAnalysis.crossListedMerged", String(mergeCrossListed)); }
     catch { /* Storage may be disabled. */ }
+  }, [mergeCrossListed]);
+  useEffect(() => {
+    setPrefixes([]);
+    setNumericCodes([]);
+    setCourseNames([]);
   }, [mergeCrossListed]);
   const [showFilters, setShowFilters] = useState(true);
   const [showCourseConfig, setShowCourseConfig] = useState(false);
@@ -787,34 +831,59 @@ export default function App() {
   }, [exams]);
 
   const handleImport = async (file: File, campus: Campus) => {
-    const datasetHash = await hashDataset(file);
-    const uploadedHashes = new Set<string>(JSON.parse(window.localStorage.getItem(DATASET_HASHES_KEY) ?? "[]"));
-    if (uploadedHashes.has(datasetHash)) {
-      throw new Error("The same dataset is being uploaded. Choose a different dataset file.");
-    }
+    // A single workbook may contain both M1 and F1 sections.
+    const semester = await detectScheduleSemester(file);
     const imported = await parseScheduleFile(file);
-    const matchingCampus = imported.filter((course) => course.gender === campus);
-    if (!matchingCampus.length) {
-      throw new Error(`This workbook does not contain ${campus} campus sections.`);
-    }
-    setCourses((current) =>
-      recalculateConflicts([
-        ...current.filter((course) => course.gender !== campus),
-        ...matchingCampus,
-      ])
+    const campuses = (["Male", "Female"] as Campus[]).filter((c) =>
+      imported.some((course) => course.gender === c)
     );
-    uploadedHashes.add(datasetHash);
-    window.localStorage.setItem(DATASET_HASHES_KEY, JSON.stringify([...uploadedHashes]));
-    setCampusTab(campus);
-    return matchingCampus.length;
+    if (!campuses.length) throw new Error("No Male or Female sections found in this workbook.");
+
+    // Refresh the saved-campus list to avoid overwriting data after a stale page load.
+    const { semesters: existingSemesters } = await scheduleApi<{ semesters: ScheduleSemesterEntry[] }>("/api/schedules/semesters");
+    const saved = existingSemesters.find((entry) => entry.semester === semester)?.campuses ?? [];
+    const replacing = campuses.filter((c) => saved.includes(c));
+    if (replacing.length && !window.confirm(
+      `Semester ${semester} already contains ${replacing.join(" and ")} campus data. Replace only ${replacing.join(" and ")} for this semester?`
+    )) {
+      throw new Error("Import cancelled; existing schedule preserved.");
+    }
+
+    for (const importedCampus of campuses) {
+      const matching = imported.filter((course) => course.gender === importedCampus);
+      await scheduleApi<{ count: number }>(`/api/schedules/import?overwrite=${saved.includes(importedCampus)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ semester, campus: importedCampus, records: matching }),
+      });
+    }
+    const { semesters } = await scheduleApi<{ semesters: ScheduleSemesterEntry[] }>("/api/schedules/semesters");
+    setScheduleSemesters(semesters);
+    // Update immediately even when the semester was already selected.
+    const { records } = await scheduleApi<{ records: ScheduleCourse[] }>(
+      `/api/schedules?semester=${encodeURIComponent(semester)}`
+    );
+    ++scheduleLoadId.current;
+    setCourses(recalculateConflicts(records));
+    selectScheduleSemester(semester);
+    setSelectedCourse(null);
+    setScheduleLoadError("");
+    setCampusTab(campuses.includes(campus) ? campus : campuses[0]);
+    return imported.length;
   };
+
+  // Normalize cross-listed records before applying filters or building dropdown options.
+  const scheduleViewCourses = useMemo(
+    () => mergeCrossListed ? mergeCrossListedCourses(courses) : courses,
+    [courses, mergeCrossListed]
+  );
 
   const filteredCourses = useMemo(
     () =>
-      courses.filter((course) => {
+      scheduleViewCourses.filter((course) => {
         const query = search.trim().toLowerCase();
         const { prefix, numeric } = getCourseParts(course.code);
-        const ccesRows = ccesCourseCatalog.filter((item) => item.code === course.code);
+        const ccesRows = ccesCourseCatalog.filter((item) => (mergeCrossListed ? canonicalScheduleCode(item.code) : item.code) === course.code);
         const selectedMajors = departments.filter((department): department is CcesMajor =>
           CCES_MAJORS.includes(department as CcesMajor)
         );
@@ -829,7 +898,7 @@ export default function App() {
           prefix !== "GEIT";
         const passesConfiguration =
           !ccesSelected ||
-          (configuredCourses.includes(course.code) &&
+          ((configuredCourses.includes(course.code) || (mergeCrossListed && ccesCourseCatalog.some((item) => canonicalScheduleCode(item.code) === course.code && configuredCourses.includes(item.code)))) &&
             (prefix !== "MATH" || configCategories.MATH) &&
             (prefix !== "GEIT" || configCategories.GEIT) &&
             (!isElective || configCategories.Electives));
@@ -839,7 +908,7 @@ export default function App() {
           (campusTab === "All" || course.gender === campusTab) &&
           types.includes(course.roomType) &&
           (departments.length === 0 || (ccesSelected ? isMajorCourse : departments.includes(prefix))) &&
-          (courseNames.length === 0 || courseNames.includes(course.name)) &&
+          (courseNames.length === 0 || courseNames.includes(colleges.includes("CCES") ? canonicalCourseTitle(course.code, course.name) : course.name)) &&
           (prefixes.length === 0 || prefixes.includes(prefix)) &&
           (numericCodes.length === 0 || numericCodes.includes(numeric)) &&
           passesConfiguration &&
@@ -856,7 +925,7 @@ export default function App() {
           (!query || `${course.id} ${course.code} ${course.code.split(" ")[0]} ${course.name} ${course.instructor} ${course.room}`.toLowerCase().includes(query))
         );
       }),
-    [campusTab, colleges, configuredCourses, configCategories, courseNames, departments, instructors, levels, numericCodes, prefixes, rooms, search, statuses, timeSlots, types, courses]
+    [campusTab, colleges, configuredCourses, configCategories, courseNames, departments, instructors, levels, numericCodes, prefixes, rooms, search, statuses, timeSlots, types, scheduleViewCourses]
   );
   const conflictReportDepartmentOptions = useMemo(() => {
     if (conflictReportColleges.length === 0) {
@@ -897,10 +966,7 @@ export default function App() {
     capacity: includedConflictTypes.includes("capacity") ? reportScope.filter((course) => course.conflicts.includes("capacity")).length : 0,
     prerequisite: includedConflictTypes.includes("prerequisite") ? reportScope.filter((course) => course.conflicts.includes("prerequisite")).length : 0,
   }), [includedConflictTypes, reportScope]);
-  const displayedCourses = useMemo(
-    () => mergeCrossListed ? mergeCrossListedCourses(filteredCourses) : filteredCourses,
-    [filteredCourses, mergeCrossListed]
-  );
+  const displayedCourses = filteredCourses;
   const downloadConflictReport = () => {
     if (!conflictReportSnapshot) return;
     const escape = (value: string | number) => `"${String(value).replace(/"/g, "\"\"")}"`;
@@ -1029,13 +1095,13 @@ export default function App() {
 
   const courseOptionPool = useMemo(
     () =>
-      courses.filter(
+      scheduleViewCourses.filter(
         (course) =>
           (campusTab === "All" || course.gender === campusTab) &&
           (colleges.length === 0 || colleges.some((college) => courseBelongsToCollege(course.code, college, course.name))) &&
-          (!colleges.includes("CCES") || ccesCourseCatalog.some((item) => item.code === course.code))
+          (!colleges.includes("CCES") || ccesCourseCatalog.some((item) => (mergeCrossListed ? canonicalScheduleCode(item.code) : item.code) === course.code))
       ),
-    [campusTab, colleges, courses]
+    [campusTab, colleges, scheduleViewCourses]
   );
   const courseDepartments = useMemo(
     () => colleges.includes("CCES")
@@ -1385,9 +1451,15 @@ export default function App() {
               </div>
               <div className="semester-block">
                 <span>Viewing semester</span>
-                <button>
-                  Fall 2027 <Icon name="chevron" size={15} />
-                </button>
+                <select
+                  aria-label="Schedule semester"
+                  value={scheduleSemester}
+                  onChange={(event) => selectScheduleSemester(event.target.value)}
+                  style={{ padding: "9px 12px", borderRadius: 8, minWidth: 155 }}
+                >
+                  {!scheduleSemester && <option value="">Sample schedule (not imported)</option>}
+                  {scheduleSemesters.map(({ semester }) => <option key={semester} value={semester}>{semester}</option>)}
+                </select>
               </div>
             </section>
 
@@ -1395,13 +1467,14 @@ export default function App() {
               <div className="import-copy">
                 <span className="step-number">✓</span>
                 <div>
-                  <strong>Fall 2027 workbooks loaded</strong>
+                  <strong>{scheduleSemester ? `Semester ${scheduleSemester} schedules` : "Sample schedule (not stored)"}</strong>
                   <small>
                     {currentMeta.femaleSections} female and {currentMeta.maleSections} male scheduled sections.
-                    Uploading replaces that campus.
+                    Combined or separate campus files are supported. Existing data requires confirmation.
                   </small>
                 </div>
               </div>
+              {scheduleLoadError && <p role="alert" style={{ color: "#b45309", margin: "6px 0" }}>Schedule storage: {scheduleLoadError}</p>}
               <div className="import-actions">
                 <FileImport label="Male schedule" campus="Male" onImport={handleImport} />
                 <FileImport label="Female schedule" campus="Female" onImport={handleImport} />

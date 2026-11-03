@@ -1,5 +1,3 @@
-
-
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { type Grade, type GradeRecord } from "./gradeData";
@@ -14,6 +12,7 @@ const allGrades: Grade[] = [...grades, "P"];
 const gradeColors = ["#258C70", "#34805B", "#3E78CE", "#315FC5", "#D17829", "#B86428", "#D75A2B", "#C73C3C", "#7E6C91"];
 const sectionColors = ["#2E78A4", "#D85E9C"];
 const semesterLabels: Record<string, string> = { "202510": "Fall 2025" };
+const semesterLabel = (code: string) => semesterLabels[code] ?? code;
 const gradeLabels: Record<Exclude<Grade, "P">, string> = {
   "A+": "A+",
   A: "A",
@@ -46,7 +45,6 @@ const sectionKey = (record: SectionGradeRecord) => `${record.campus}|${record.co
 const sectionLabel = (record: SectionGradeRecord) => `Section ${record.section} · ${record.campus.replace(" Campus", "")}`;
 const chartSeriesKey = (record: ChartSeries, index: number) => `${record.course}|${record.campus}|${record.section ?? ""}|${record.instructor ?? ""}|${index}`;
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-const GRADE_MERGE_STORAGE_KEY = "gradeAnalysis.crossListedMerged";
 
 type BackendGradeRow = Record<string, unknown>;
 
@@ -251,7 +249,7 @@ function CohortChart({ initialRecord, initialMode }: { initialRecord: GradeRecor
   );
 }
 
-export default function GradeAnalysis() {
+export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEnabled: boolean; onMergeChange: (merged: boolean) => void }) {
   const [gradeRecords, setGradeRecords] = useState<SectionGradeRecord[]>(() => sectionGradeData.map((record) => ({ ...record, grades: { ...record.grades } })));
   const [activePanel, setActivePanel] = useState<"analysis" | "report">("analysis");
   const [reportMode, setReportMode] = useState<ReportMode>("course");
@@ -273,13 +271,7 @@ export default function GradeAnalysis() {
   const [sortAsc, setSortAsc] = useState(true);
   const [isMerging, setIsMerging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [mergeEnabled, setMergeEnabled] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(GRADE_MERGE_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
+
 
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -298,7 +290,7 @@ export default function GradeAnalysis() {
     setReportGenerated(false);
     setFilters((current) => ({
       ...current,
-      semester: records[0]?.semester ?? current.semester,
+      semester: records.some((record) => record.semester === current.semester) ? current.semester : (records[0]?.semester ?? current.semester),
       department: "All",
       course: "All",
       instructor: "All",
@@ -317,7 +309,7 @@ export default function GradeAnalysis() {
         // Keep the bundled example dataset until files are imported.
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [mergeEnabled]);
 
   const handleMergeCrossListed = async () => {
     if (isMerging || isImporting) return;
@@ -326,12 +318,7 @@ export default function GradeAnalysis() {
     try {
       const records = await requestGradeSections(next);
       applyRecords(records);
-      setMergeEnabled(next);
-      try {
-        window.localStorage.setItem(GRADE_MERGE_STORAGE_KEY, String(next));
-      } catch {
-        // The view still changes for this session if browser storage is unavailable.
-      }
+      onMergeChange(next);
       showToast("success", next ? "Merged cross-listed view enabled." : "Original course view restored.");
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to load grade data.");
@@ -361,15 +348,23 @@ export default function GradeAnalysis() {
       form.append("male", male);
       form.append("female", female);
       form.append("courses", courses);
-      const response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
+      let response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
+      if (response.status === 409) {
+        const conflict = await response.json().catch(() => ({}));
+        if (!window.confirm(`${conflict.detail ?? "This semester already exists."} Replace only that semester?`)) return;
+        form.append("replace_existing", "true");
+        response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
+      }
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(typeof error.detail === "string" ? error.detail : "Grade import failed.");
       }
+      const importResult: { semester: string } = await response.json();
       // Preserve the user's selected cross-listed/original view after importing.
       const records = await requestGradeSections(mergeEnabled);
       applyRecords(records);
-      showToast("success", `${records.length} grade sections imported and processed successfully.`);
+      setFilters((current) => ({ ...current, semester: importResult.semester }));
+      showToast("success", `Semester ${importResult.semester} imported. Other semesters were preserved.`);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to import grade files.");
     } finally {
@@ -668,7 +663,7 @@ export default function GradeAnalysis() {
 
   const renderFilterControls = () => (
     <section className="grade-filters grade-panel">
-      <div className="grade-filter-field"><label>Semester</label><select value={filters.semester} onChange={(e) => { setReportGenerated(false); setFilters((current) => ({ ...current, semester: e.target.value })); }}>{[...new Set(gradeRecords.map((record) => record.semester))].map((semester) => <option key={semester} value={semester}>{semesterLabels[semester] ?? semester}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Semester</label><select value={filters.semester} onChange={(e) => { setReportGenerated(false); setFilters((current) => ({ ...current, semester: e.target.value })); }}>{[...new Set(gradeRecords.map((record) => record.semester))].map((semester) => <option key={semester} value={semester}>{semesterLabel(semester)}</option>)}</select></div>
       <div className="grade-filter-field"><label>College</label><select value="CCES" disabled><option>CCES</option></select></div>
       <div className="grade-filter-field"><label>Department</label><select value={filters.department} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, department: e.target.value, course: "All", instructor: "All" })); }}><option value="All">All Departments</option>{departmentOptions.map((department) => <option key={department}>{department}</option>)}</select></div>
       <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, course: e.target.value, instructor: "All" })); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
@@ -706,6 +701,9 @@ export default function GradeAnalysis() {
             {isMerging ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="sections" />}
             {isMerging ? "Loading…" : mergeEnabled ? "Show Original Courses" : "Merge Cross-Listed Courses"}
           </button>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            Semester detected automatically from uploaded filenames or report headers
+          </label>
           <input
             ref={importInputRef}
             className="sr-only"
