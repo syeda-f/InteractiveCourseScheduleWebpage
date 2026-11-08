@@ -41,7 +41,34 @@ const chartSeriesColor = (record: ChartSeries) => {
   const lightness = 36 + ((hash >> 9) % 28);
   return `hsl(${hue} ${saturation}% ${lightness}%)`;
 };
-const sectionKey = (record: SectionGradeRecord) => `${record.campus}|${record.course}|${record.section}|${record.instructor}`;
+/** One chart/report section per semester, course, campus and section number.
+ * Source rows are additive grade groups, not duplicate copies.
+ * Do not combine across semesters, courses or campuses.
+ */
+function combineSectionGradeRows(records: SectionGradeRecord[]): SectionGradeRecord[] {
+  const grouped = new Map<string, SectionGradeRecord>();
+  const instructors = new Map<string, Set<string>>();
+  for (const record of records) {
+    const key = JSON.stringify([record.semester, record.course.trim().toUpperCase(), record.campus, record.section.trim()]);
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...record, grades: { ...record.grades } });
+      instructors.set(key, new Set(record.instructor && record.instructor !== "Unassigned" ? [record.instructor] : []));
+      continue;
+    }
+    // Different grade rows for the same section represent different students.
+    current.totalStudents += record.totalStudents;
+    allGrades.forEach((grade) => { current.grades[grade] += record.grades[grade]; });
+    if (record.instructor && record.instructor !== "Unassigned") instructors.get(key)!.add(record.instructor);
+  }
+  grouped.forEach((record, key) => {
+    const names = [...(instructors.get(key) ?? [])];
+    record.instructor = names.length ? names.join(" / ") : "Unassigned";
+  });
+  return [...grouped.values()];
+}
+
+const sectionKey = (record: SectionGradeRecord) => `${record.semester}|${record.campus}|${record.course}|${record.section}`;
 const sectionLabel = (record: SectionGradeRecord) => `Section ${record.section} · ${record.campus.replace(" Campus", "")}`;
 const chartSeriesKey = (record: ChartSeries, index: number) => `${record.course}|${record.campus}|${record.section ?? ""}|${record.instructor ?? ""}|${index}`;
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
@@ -250,7 +277,7 @@ function CohortChart({ initialRecord, initialMode }: { initialRecord: GradeRecor
 }
 
 export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEnabled: boolean; onMergeChange: (merged: boolean) => void }) {
-  const [gradeRecords, setGradeRecords] = useState<SectionGradeRecord[]>(() => sectionGradeData.map((record) => ({ ...record, grades: { ...record.grades } })));
+  const [gradeRecords, setGradeRecords] = useState<SectionGradeRecord[]>(() => combineSectionGradeRows(sectionGradeData));
   const [activePanel, setActivePanel] = useState<"analysis" | "report">("analysis");
   const [reportMode, setReportMode] = useState<ReportMode>("course");
   const [filters, setFilters] = useState({ semester: "202510", department: "All", course: "GEIT 1411", instructor: "All", campus: "All", mode: "Student Count" as DisplayMode });
@@ -284,7 +311,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   };
 
   const applyRecords = (records: SectionGradeRecord[]) => {
-    setGradeRecords(records);
+    setGradeRecords(combineSectionGradeRows(records));
     setSelectedSections([]);
     setExpandedCohort(null);
     setReportGenerated(false);
