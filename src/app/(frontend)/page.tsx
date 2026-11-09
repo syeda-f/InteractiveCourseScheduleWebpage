@@ -1,5 +1,5 @@
-import ScheduleDashboard from "@/components/schedule/App"
+import ScheduleClient from './ScheduleClient'
 
 export default function HomePage() {
-  return <ScheduleDashboard />
+  return <ScheduleClient />
 }
