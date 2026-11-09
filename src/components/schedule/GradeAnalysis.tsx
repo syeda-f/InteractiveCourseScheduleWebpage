@@ -506,7 +506,9 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   const [chairEmails, setChairEmails] = useState("mkhan@pmu.edu.sa, sabdulrahman@pmu.edu.sa, nmohammad@pmu.edu.sa");
   const [senderEmail, setSenderEmail] = useState("mkhan@pmu.edu.sa");
   const [sendingEmails, setSendingEmails] = useState(false);
-  const importInputRef = useRef<HTMLInputElement>(null);
+  const [showImportPanel, setShowImportPanel] = useState(false);
+  const [importSemester, setImportSemester] = useState("");
+  const [importFiles, setImportFiles] = useState<Partial<Record<"male" | "female" | "courses" | "combined_sections", File>>>({});
   const toastTimerRef = useRef<number | null>(null);
 
   const showToast = (type: "success" | "error" | "info", message: string) => {
@@ -559,31 +561,30 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     }
   };
 
-  const handleGradeImport = async (files?: FileList | null) => {
-    if (!files || isImporting) return;
+  const handleGradeImport = async () => {
+    if (isImporting) return;
+    const selected = Object.entries(importFiles).filter((entry): entry is [string, File] => Boolean(entry[1]));
+    if (!selected.length) {
+      showToast("error", "Select at least one CSV file to import.");
+      return;
+    }
+    if (selected.some(([, file]) => !file.name.toLowerCase().endsWith(".csv"))) {
+      showToast("error", "Only CSV files are supported.");
+      return;
+    }
+    if (importSemester.trim() && !/^20\d{4}$/.test(importSemester.trim())) {
+      showToast("error", "Semester must be a six-digit code beginning with 20.");
+      return;
+    }
     setIsImporting(true);
     try {
-      const selected = Array.from(files);
-      if (selected.length !== 3) {
-        throw new Error("Select exactly three CSV files: male sections, female sections, and combined course grades.");
-      }
-      if (selected.some((file) => !file.name.toLowerCase().endsWith(".csv"))) {
-        throw new Error("The grade ETL currently accepts CSV files only.");
-      }
-      const male = selected.find((file) => /male/i.test(file.name) && !/female/i.test(file.name));
-      const female = selected.find((file) => /female/i.test(file.name));
-      const courses = selected.find((file) => file !== male && file !== female);
-      if (!male || !female || !courses) {
-        throw new Error("Include filenames containing 'Male' and 'Female', plus the combined course grades CSV.");
-      }
       const form = new FormData();
-      form.append("male", male);
-      form.append("female", female);
-      form.append("courses", courses);
+      selected.forEach(([field, file]) => form.append(field, file));
+      if (importSemester.trim()) form.append("semester", importSemester.trim());
       let response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
       if (response.status === 409) {
         const conflict = await response.json().catch(() => ({}));
-        if (!window.confirm(`${conflict.detail ?? "This semester already exists."} Replace only that semester?`)) return;
+        if (!window.confirm(`${conflict.detail ?? "These datasets already exist."} Replace only the conflicting datasets?`)) return;
         form.append("replace_existing", "true");
         response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
       }
@@ -591,17 +592,23 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         const error = await response.json().catch(() => ({}));
         throw new Error(typeof error.detail === "string" ? error.detail : "Grade import failed.");
       }
-      const importResult: { semester: string } = await response.json();
-      // Preserve the user's selected cross-listed/original view after importing.
-      const records = await requestGradeSections(mergeEnabled);
-      applyRecords(records);
-      setFilters((current) => ({ ...current, semesters: [importResult.semester] }));
-      showToast("success", `Semester ${importResult.semester} imported. Other semesters were preserved.`);
+      const result: { semester: string; imported?: string[] } = await response.json();
+      // Section-level records refresh independently. A courses-only import
+      // remains saved on the server and available through record_type=course.
+      try {
+        const records = await requestGradeSections(mergeEnabled);
+        applyRecords(records);
+      } catch (refreshError) {
+        console.warn("Grade import succeeded but the section dashboard could not refresh:", refreshError);
+      }
+      setFilters((current) => ({ ...current, semesters: [result.semester] }));
+      setImportFiles({});
+      setShowImportPanel(false);
+      showToast("success", `Imported ${(result.imported ?? selected.map(([key]) => key)).join(", ")} for semester ${result.semester}.`);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to import grade files.");
     } finally {
       setIsImporting(false);
-      if (importInputRef.current) importInputRef.current.value = "";
     }
   };
 
@@ -951,7 +958,6 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
 
   const renderFilterControls = () => (
     <section className="grade-filters grade-panel">
-      <div className="grade-filter-field"><label>Semester</label><select value={filters.semester} onChange={(e) => { setReportGenerated(false); setFilters((current) => ({ ...current, semester: e.target.value })); }}>{[...new Set(gradeRecords.map((record) => record.semester))].map((semester) => <option key={semester} value={semester}>{semesterLabel(semester)}</option>)}</select></div>
       <div className="grade-filter-field grade-semester-filter">
         <label>Semester</label>
         <details>
@@ -999,23 +1005,67 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
             {isMerging ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="sections" />}
             {isMerging ? "Loading…" : mergeEnabled ? "Show Original Courses" : "Merge Cross-Listed Courses"}
           </button>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            Semester detected automatically from uploaded filenames or report headers
-          </label>
-          <input
-            ref={importInputRef}
-            className="sr-only"
-            type="file"
-            accept=".csv,text/csv"
-            multiple
-            onChange={(event) => void handleGradeImport(event.target.files)}
-          />
-          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging} onClick={() => importInputRef.current?.click()}>
-            {isImporting ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="upload" />}
-            {isImporting ? "Importing…" : "Import Files"}
+          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging} onClick={() => setShowImportPanel((current) => !current)}>
+            <MiniIcon name="upload" /> {showImportPanel ? "Close Import" : "Import Files"}
           </button>
         </div>
       </section>
+      {showImportPanel && (
+        <section className="grade-import-panel" style={{ padding: 16, marginBottom: 20, border: "1px solid #d5dbe5", borderRadius: 12 }}>
+          <label style={{ display: "block", marginBottom: 10 }}>
+            Select CSV files (up to four)
+            <input
+              style={{ display: "block", marginTop: 6 }}
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+              disabled={isImporting}
+              onChange={(event) => {
+                const incoming = Array.from(event.target.files ?? []);
+                const classify = (name: string): keyof typeof importFiles | null => {
+                  const n = name.toLowerCase();
+                  if (/course|merged_male_female/.test(n) && !/section/.test(n)) return "courses";
+                  if (/combined.*section|section.*combined/.test(n)) return "combined_sections";
+                  if (/female/.test(n) && !/male.*female|female.*male/.test(n)) return "female";
+                  if (/male/.test(n) && !/female/.test(n)) return "male";
+                  return null;
+                };
+                const next: typeof importFiles = {};
+                const unknown: string[] = [];
+                const duplicates: string[] = [];
+                for (const file of incoming) {
+                  const key = classify(file.name);
+                  if (!key) { unknown.push(file.name); continue; }
+                  if (next[key]) { duplicates.push(file.name); continue; }
+                  next[key] = file;
+                }
+                setImportFiles(next);
+                if (unknown.length || duplicates.length) {
+                  showToast("error", `Could not assign: ${[...unknown, ...duplicates].join(", ")}. Rename files to identify courses, male, female, or combined sections.`);
+                }
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {Object.entries(importFiles).filter(([, file]) => Boolean(file)).map(([kind, file]) => (
+            <div key={kind} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+              <span>{kind.replaceAll("_", " ")}: {file?.name}</span>
+              <button type="button" className="grade-button grade-button--secondary" disabled={isImporting} onClick={() => setImportFiles((current) => {
+                const next = { ...current };
+                delete next[kind as keyof typeof next];
+                return next;
+              })}>Remove</button>
+            </div>
+          ))}
+          <label style={{ display: "block", marginTop: 10, marginBottom: 12 }}>
+            Semester code (only if not included in filenames)
+            <input style={{ display: "block", marginTop: 5, padding: 8 }} type="text" inputMode="numeric" placeholder="e.g. 202510" value={importSemester} onChange={(event) => setImportSemester(event.target.value)} />
+          </label>
+          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging || !Object.values(importFiles).some(Boolean)} onClick={() => void handleGradeImport()}>
+            {isImporting ? "Importing…" : "Import Selected Files"}
+          </button>
+        </section>
+      )}
       {toast && <div className={`grade-toast grade-toast--${toast.type}`} role="status" aria-live="polite"><MiniIcon name={toast.type === "error" ? "alert" : toast.type === "success" ? "check" : "sections"} /><span>{toast.message}</span></div>}
 
       <div className="grade-view-tabs" role="tablist" aria-label="Grade analysis views">

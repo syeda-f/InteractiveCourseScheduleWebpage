@@ -13,7 +13,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.schedule_etl import run as run_schedule_etl
-from backend.grades_etl import run as run_grades_etl
+from backend.grades_etl import parse_grade_source, rebuild_grade_views, SOURCE_NAMES
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -24,7 +24,8 @@ GRADES_DIR = OUTPUT_DIR / "grades"
 app = FastAPI(title="Academic Planning Analytics API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8443", "http://127.0.0.1:8443", "http://192.168.1.5:8443"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8443", "http://127.0.0.1:8443", "http://192.168.1.5:8443", "http://localhost:3000",
+        "http://127.0.0.1:3000",],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -126,41 +127,107 @@ def detect_grade_semester(uploads: list[UploadFile]) -> str:
     return codes.pop()
 
 
+def _grade_source_path(term: str, name: str) -> Path:
+    return GRADES_DIR / term / f"{name}.csv"
+
+
+def _existing_grade_sources(term: str) -> dict[str, pd.DataFrame]:
+    sources = {}
+    for name in SOURCE_NAMES:
+        path = _grade_source_path(term, name)
+        if path.is_file():
+            sources[name] = pd.read_csv(path)
+    # Migrate the older all-in-one format when independently updating a term.
+    # Original section rows are split by campus; course rows remain independent.
+    if not sources:
+        legacy = available_grade_files().get(term)
+        if legacy is not None:
+            old = pd.read_csv(legacy)
+            if {'record_type', 'merge_status', 'campus'}.issubset(old.columns):
+                original = old.loc[old['merge_status'].eq('original')].copy()
+                for campus, name in [('Male', 'male'), ('Female', 'female')]:
+                    part = original.loc[original['record_type'].eq('section') & original['campus'].eq(campus)].copy()
+                    if not part.empty:
+                        sources[name] = part.drop(columns=['record_type', 'merge_status'])
+                courses = original.loc[original['record_type'].eq('course')].copy()
+                if not courses.empty:
+                    sources['courses'] = courses.drop(columns=['record_type', 'merge_status'])
+    return sources
+
+
+@app.get("/api/grades/import-status")
+def grade_import_status(semester: str):
+    if not re.fullmatch(r"20\d{4}", semester):
+        raise HTTPException(status_code=422, detail="Invalid semester code")
+    sources = _existing_grade_sources(semester)
+    return {"semester": semester, "datasets": {name: name in sources for name in SOURCE_NAMES}}
+
+
 @app.post("/api/grades/import")
 async def import_grades(
-    male: UploadFile = File(...),
-    female: UploadFile = File(...),
-    courses: UploadFile = File(...),
+    male: Optional[UploadFile] = File(None),
+    female: Optional[UploadFile] = File(None),
+    courses: Optional[UploadFile] = File(None),
+    combined_sections: Optional[UploadFile] = File(None),
     replace_existing: bool = Form(False),
+    semester: Optional[str] = Form(None),
 ):
-    """Upload the three raw grade CSVs; use the server's cross-list mapping."""
-    semester = detect_grade_semester([male, female, courses])
-    target = GRADES_DIR / f"grades_{semester}.csv"
-    if target.exists() and not replace_existing:
-        raise HTTPException(status_code=409, detail=f"Semester {semester} already exists. Confirm replacement to reimport it.")
+    """Import any subset of the four CSV datasets, preserving other datasets."""
+    uploads = {name: upload for name, upload in {
+        'male': male, 'female': female, 'courses': courses,
+        'combined_sections': combined_sections,
+    }.items() if upload is not None}
+    if not uploads:
+        raise HTTPException(status_code=422, detail="Upload at least one CSV file")
+    detected = detect_grade_semester(list(uploads.values())) if semester is None else semester
+    if not re.fullmatch(r"20\d{4}", detected):
+        raise HTTPException(status_code=422, detail="Semester must be a six-digit code beginning with 20")
+    # If semester is explicitly supplied, ensure any embedded codes agree.
+    if semester is not None:
+        pattern = re.compile(r"(?<!\d)(20\d{4})(?!\d)")
+        for upload in uploads.values():
+            position = upload.file.tell()
+            upload.file.seek(0)
+            header = upload.file.read(4096).decode('utf-8-sig', errors='replace').splitlines()[:3]
+            upload.file.seek(position)
+            codes = set(pattern.findall(upload.filename or '')) | set(pattern.findall('\n'.join(header)))
+            if codes and codes != {semester}:
+                raise HTTPException(status_code=422, detail=f"File {upload.filename} has a different semester code")
+    existing = _existing_grade_sources(detected)
+    conflicts = sorted(set(uploads).intersection(existing))
+    if conflicts and not replace_existing:
+        raise HTTPException(status_code=409, detail=f"Datasets already imported: {', '.join(conflicts)}. Confirm replacement to reimport them.")
     mapping = require_reference_file("Cross_Listed_Codes.csv")
-    with TemporaryDirectory() as folder:
-        folder = Path(folder)
-        male_path = folder / "male.csv"
-        female_path = folder / "female.csv"
-        courses_path = folder / "courses.csv"
-        male_path.write_bytes(await male.read())
-        female_path.write_bytes(await female.read())
-        courses_path.write_bytes(await courses.read())
+    with TemporaryDirectory() as tmp:
+        folder = Path(tmp)
         try:
-            sections_original, sections_merged, courses_original, courses_merged = (
-                run_grades_etl(male_path, female_path, courses_path, mapping, term_code=semester)
-            )
-        except (ValueError, KeyError, AssertionError, pd.errors.ParserError) as exc:
+            for name, upload in uploads.items():
+                path = folder / f"{name}.csv"
+                path.write_bytes(await upload.read())
+                existing[name] = parse_grade_source(path, name, detected)
+            final, counts = rebuild_grade_views(existing, mapping, detected)
+        except (ValueError, KeyError, AssertionError, IndexError, pd.errors.ParserError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # Validate all inputs before writing anything. Save each processed source
+    # separately; rebuild the existing API's per-semester CSV for compatibility.
+    target = GRADES_DIR / f"grades_{detected}.csv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for name, df in existing.items():
+        path = _grade_source_path(detected, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix('.tmp')
+        df.to_csv(temp, index=False)
+        temp.replace(path)
+    temporary = target.with_suffix('.tmp')
+    final.to_csv(temporary, index=False)
+    temporary.replace(target)
     return {
         "message": "Grade ETL completed",
-        "output": f"grades/grades_{semester}.csv",
-        "semester": semester,
-        "original_sections": len(sections_original),
-        "merged_sections": len(sections_merged),
-        "original_courses": len(courses_original),
-        "merged_courses": len(courses_merged),
+        "output": f"grades/grades_{detected}.csv",
+        "semester": detected,
+        "imported": sorted(uploads),
+        "available": sorted(existing),
+        **counts,
     }
 
 

@@ -191,3 +191,108 @@ def run(male_file=MALE_FILE, female_file=FEMALE_FILE,
 
 if __name__ == '__main__':
     run()
+
+
+# Independent imports: store each source separately, then rebuild the existing
+# grades_<term>.csv format consumed by /api/grades.
+SOURCE_NAMES = ('male', 'female', 'combined_sections', 'courses')
+
+
+def parse_grade_source(path, source, term_code):
+    """Parse one raw report. Combined sections must identify each row's campus."""
+    if source not in SOURCE_NAMES:
+        raise ValueError(f'Unknown grade source: {source}')
+    # Reports can contain a variable number of title/header rows, including
+    # repeated headings partway through the file. Read all rows first.
+    raw = pd.read_csv(path, header=None, dtype=str).dropna(how='all')
+    if raw.empty:
+        raise ValueError(f'{source}: no grade rows found')
+
+    count_col = 6 if source == 'combined_sections' else 5
+    if raw.shape[1] <= count_col:
+        raise ValueError(f'{source}: expected a student-count column at index {count_col}')
+
+    # Only remove unmistakable report/header rows. Never silently discard a
+    # malformed student-count value from an otherwise valid-looking data row.
+    normalized = raw.fillna('').astype(str).apply(lambda col: col.str.strip().str.lower())
+    header_terms = ('instructor name', 'course number', 'section number',
+                    'total students', 'department', 'course title',
+                    'student count', 'course code')
+    is_header = normalized.apply(
+        lambda col: col.isin(header_terms), axis=0
+    ).any(axis=1)
+    numeric_counts = pd.to_numeric(
+        raw.iloc[:, count_col].astype(str).str.strip().str.replace(',', '', regex=False),
+        errors='coerce',
+    )
+    data_candidates = raw.index[numeric_counts.notna() & ~is_header]
+    if len(data_candidates) == 0:
+        raise ValueError(f'{source}: no grade data rows found; check CSV layout')
+    raw = raw.loc[data_candidates[0]:]
+    raw = raw.loc[~is_header.loc[raw.index]].reset_index(drop=True)
+    if raw.empty:
+        raise ValueError(f'{source}: no grade rows found after removing headers')
+    if source == 'courses':
+        df = raw[list(COURSE_COLUMNS)].rename(columns=COURSE_COLUMNS).copy()
+    else:
+        if source == 'combined_sections':
+            # Supported combined layout: campus as first column, followed by
+            # the same 27-column section report layout used for male/female.
+            first = raw.iloc[:, 0].fillna('').str.strip().str.title()
+            if not first.isin(['Male', 'Female']).all():
+                raise ValueError('Combined Sections CSV must have Male/Female campus in the first column of each data row, followed by the usual section columns')
+            df = raw[[i + 1 for i in SECTION_COLUMNS]].copy()
+            df.columns = list(SECTION_COLUMNS.values())
+            df['campus'] = first.to_numpy()
+        else:
+            df = raw[list(SECTION_COLUMNS)].rename(columns=SECTION_COLUMNS).copy()
+            df['campus'] = source.title()
+    result = clean_data(df, term_code)
+    if result.empty:
+        raise ValueError(f'{source}: no valid grade rows found')
+    if source == 'courses' and not result['campus'].isin(['Male', 'Female']).all():
+        raise ValueError('Courses CSV must identify Male/Female campus for every row')
+    return result
+
+
+def rebuild_grade_views(sources, merge_file, term_code):
+    """Return the four existing API views, with no duplicate section records."""
+    # Prefer campus-specific sections over combined sections for that campus.
+    sections = []
+    combined = sources.get('combined_sections')
+    for campus, name in [('Male', 'male'), ('Female', 'female')]:
+        if name in sources:
+            sections.append(sources[name])
+        elif combined is not None:
+            sections.append(combined.loc[combined['campus'].eq(campus)].copy())
+    section_original = pd.concat(sections, ignore_index=True) if sections else None
+    course_original = sources.get('courses')
+    if section_original is None and course_original is None:
+        raise ValueError('At least one grade dataset must be present')
+    mapping = build_mapping(merge_file)
+    section_merged = None
+    if section_original is not None:
+        section_merged = section_original.copy()
+        section_merged['course_code'] = section_merged['course_code'].map(mapping).fillna(section_merged['course_code'])
+    course_merged = None
+    if course_original is not None:
+        course = course_original.copy()
+        course['course_code'] = course['course_code'].map(mapping).fillna(course['course_code'])
+        aggregations = {col: 'sum' for col in NUMERIC_COLUMNS}
+        aggregations['course_title'] = 'first'
+        aggregations['original_course_code'] = lambda values: ', '.join(sorted(values.dropna().unique()))
+        course_merged = calculate_percentages(course.groupby(['term_code', 'course_code'], as_index=False).agg(aggregations))
+    views = []
+    for record_type, original, merged in [('section', section_original, section_merged), ('course', course_original, course_merged)]:
+        for status, df in [('original', original), ('merged', merged)]:
+            if df is not None:
+                view = df.copy()
+                view['record_type'] = record_type
+                view['merge_status'] = status
+                views.append(view)
+    return pd.concat(views, ignore_index=True), {
+        'original_sections': 0 if section_original is None else len(section_original),
+        'merged_sections': 0 if section_merged is None else len(section_merged),
+        'original_courses': 0 if course_original is None else len(course_original),
+        'merged_courses': 0 if course_merged is None else len(course_merged),
+    }
