@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+.figma-custom-code-fragment {
+  display: contents;
+}
+
+.figma-bypass-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 2147483647;
+  transform: translateY(-150%);
+  border-radius: 6px;
+  background: #111827;
+  color: #fff;
+  padding: 8px 12px;
+  font: 600 14px/1.2 system-ui, sans-serif;
+  text-decoration: none;
+}
+
+.figma-bypass-link:focus {
+  transform: translateY(0);
+}
+
+/* Migrated schedule intelligence dashboard */
+@import "tailwindcss";
+
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #17211c;
@@ -637,6 +662,18 @@ h1 { margin-top: 7px; font-size: 31px; letter-spacing: -.035em; line-height: 1.1
 .grade-segment button.active { color: #174262; background: #fff; box-shadow: 0 1px 4px rgba(26, 60, 82, .12); }
 .grade-filter-actions { display: flex; align-items: center; gap: 6px; }
 .grade-reset { height: 34px; padding: 0 7px; border: 0; color: #617480; background: transparent; font-size: 10px; font-weight: 700; }
+.grade-filters .grade-semester-filter { width: 165px; }
+.grade-semester-filter { position: relative; }
+.grade-semester-filter details { position: relative; }
+.grade-semester-filter summary { height: 34px; display: flex; align-items: center; overflow: hidden; padding: 0 30px 0 11px; border: 1px solid #ced9e0; border-radius: 7px; color: #17364d; background: #fff; font-size: 11px; font-weight: 650; cursor: pointer; list-style: none; text-overflow: ellipsis; white-space: nowrap; }
+.grade-semester-filter summary::-webkit-details-marker { display: none; }
+.grade-semester-filter summary::after { content: ""; position: absolute; right: 11px; width: 6px; height: 6px; border-right: 1.5px solid #607581; border-bottom: 1.5px solid #607581; transform: translateY(-2px) rotate(45deg); }
+.grade-semester-filter details[open] summary::after { transform: translateY(2px) rotate(225deg); }
+.grade-semester-filter__menu { position: absolute; z-index: 35; top: calc(100% + 5px); left: 0; width: 220px; max-height: 280px; overflow-y: auto; padding: 7px; border: 1px solid #ced9e0; border-radius: 8px; background: #fff; box-shadow: 0 12px 28px rgba(20, 50, 70, .16); }
+.grade-semester-filter__menu > strong { display: block; padding: 5px 6px 8px; color: #607581; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.grade-semester-filter__menu label { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 7px 6px; color: #405968; font-size: 10px; font-weight: 650; cursor: pointer; letter-spacing: 0; text-transform: none; }
+.grade-semester-filter__menu label + label { border-top: 1px solid #edf1f3; }
+.grade-semester-filter__menu input { width: 14px; height: 14px; flex: 0 0 14px; margin: 0; accent-color: #4055d6; }
 .grade-section-filter { position: relative; }
 .grade-section-filter details { position: relative; }
 .grade-section-filter summary { height: 34px; display: flex; align-items: center; padding: 0 30px 0 11px; border: 1px solid #ced9e0; border-radius: 7px; color: #17364d; background: #fff; font-size: 12px; font-weight: 650; cursor: pointer; list-style: none; white-space: nowrap; }
@@ -678,6 +715,17 @@ h1 { margin-top: 7px; font-size: 31px; letter-spacing: -.035em; line-height: 1.1
 .grade-chart-card, .grade-table-card { margin-bottom: 14px; padding: 17px 18px; }
 .grade-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .grade-chart-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.grade-comparison-grade-filter { position: relative; z-index: 18; }
+.grade-comparison-grade-filter summary { min-width: 170px; height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border: 1px solid #cbd8df; border-radius: 7px; color: #315f7b; background: #fff; font-size: 9px; font-weight: 750; cursor: pointer; list-style: none; }
+.grade-comparison-grade-filter summary::-webkit-details-marker { display: none; }
+.grade-comparison-grade-filter summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.grade-comparison-grade-filter[open] summary::after { transform: translateY(2px) rotate(225deg); }
+.grade-comparison-grade-filter > div { position: absolute; top: 39px; right: 0; width: 205px; padding: 7px; border: 1px solid #ced9e0; border-radius: 9px; background: #fff; box-shadow: 0 12px 28px rgba(20, 50, 70, .18); }
+.grade-comparison-grade-filter > div > strong { display: block; padding: 5px 6px 8px; color: #607581; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.grade-comparison-grade-filter label { display: grid; grid-template-columns: 14px 8px 1fr; align-items: center; gap: 8px; padding: 6px; color: #405968; font-size: 10px; font-weight: 650; cursor: pointer; }
+.grade-comparison-grade-filter label + label { border-top: 1px solid #edf1f3; }
+.grade-comparison-grade-filter input { width: 14px; height: 14px; margin: 0; accent-color: #4055d6; }
+.grade-comparison-grade-filter label i { width: 8px; height: 8px; border-radius: 50%; }
 .grade-chart-campus-filter { display: flex; align-items: center; gap: 8px; color: #6f7e88; font-size: 10px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }
 .grade-chart-campus-filter .grade-segment { width: 210px; }
 .grade-chart-metric { display: flex; padding: 3px; border-radius: 8px; background: #eef3f6; }
@@ -695,6 +743,21 @@ h1 { margin-top: 7px; font-size: 31px; letter-spacing: -.035em; line-height: 1.1
 .grade-chart-legend__campus small { color: #82919a; font-size: 8px; }
 .grade-chart-legend__details { display: flex !important; flex-direction: column; align-items: flex-start !important; gap: 1px !important; }
 .grade-chart-legend__details b { color: #3d5868; font-size: 9px; }
+.grade-semester-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-top: 14px; padding: 8px 10px; border: 1px solid #dce5e9; border-radius: 8px; background: #f8fafb; }
+.grade-semester-legend::before { content: "Semesters"; margin-right: 2px; color: #73838d; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.grade-semester-legend span { display: inline-flex; align-items: center; gap: 6px; color: #3d5868; font-size: 9px; font-weight: 750; }
+.grade-semester-legend i { width: 9px; height: 9px; border-radius: 50%; }
+.grade-semester-chart { margin-top: 10px; }
+.grade-semester-chart svg { width: 100%; height: 340px; overflow: visible; }
+.grade-semester-chart__grid { stroke: #e1e8ec; stroke-width: 1; }
+.grade-semester-chart__semester-line { opacity: .18; stroke-width: 2; stroke-dasharray: 4 5; }
+.grade-semester-chart__tick, .grade-semester-chart__students { fill: #87949c; font-size: 9px; font-weight: 650; }
+.grade-semester-chart__semester { font-size: 10px; font-weight: 800; }
+.grade-semester-chart__axis-label { fill: #73838d; font-size: 10px; font-weight: 750; }
+.grade-semester-chart__x-label { margin-top: -7px; color: #73838d; font-size: 9px; font-weight: 750; text-align: center; }
+.grade-semester-chart__grade-key { display: flex; justify-content: center; flex-wrap: wrap; gap: 7px 13px; padding-top: 4px; color: #60717c; font-size: 9px; font-weight: 700; }
+.grade-semester-chart__grade-key span { display: inline-flex; align-items: center; gap: 5px; }
+.grade-semester-chart__grade-key i { width: 14px; height: 3px; border-radius: 2px; }
 .grade-chart-wrap { position: relative; display: grid; grid-template-columns: 34px 1fr; height: 340px; margin-top: 30px; padding-left: 18px; }
 .grade-y-label { position: absolute; left: -16px; top: 45%; transform: rotate(-90deg); color: #7d8b94; font-size: 9px; font-weight: 700; }
 .grade-y-axis { display: flex; flex-direction: column; justify-content: space-between; padding-bottom: 28px; color: #86949c; text-align: right; font-size: 8px; }
@@ -970,6 +1033,18 @@ h1 { margin-top: 7px; font-size: 31px; letter-spacing: -.035em; line-height: 1.1
 .theme-dark .grade-minimum-students select { color: #e9f4ee; background: #12231b; border-color: #355046; }
 .theme-dark .grade-button--secondary { color: #dce9e2; background: #12231b; border-color: #355046; }
 .theme-dark .grade-toast { color: #f7f7f7; border-color: #5D6D7E; background: #283747; }
+.theme-dark .grade-semester-filter summary,
+.theme-dark .grade-semester-filter__menu,
+.theme-dark .grade-comparison-grade-filter summary,
+.theme-dark .grade-comparison-grade-filter > div { color: #e9f4ee; background: #12231b; border-color: #355046; }
+.theme-dark .grade-semester-filter__menu label,
+.theme-dark .grade-comparison-grade-filter label,
+.theme-dark .grade-semester-chart__grade-key,
+.theme-dark .grade-semester-legend span { color: #c5d4cd; }
+.theme-dark .grade-semester-filter__menu label + label,
+.theme-dark .grade-comparison-grade-filter label + label { border-color: #294238; }
+.theme-dark .grade-semester-legend { background: #102019; border-color: #294238; }
+.theme-dark .grade-semester-chart__grid { stroke: #294238; }
 
 @media (max-width: 1100px) {
   .grade-filters { width: 100%; flex-wrap: wrap; }
@@ -1053,3 +1128,69 @@ h1 { margin-top: 7px; font-size: 31px; letter-spacing: -.035em; line-height: 1.1
 .theme-dark .grade-view-tabs button.active,
 .theme-dark .grade-segment button.active { color: var(--theme-peach); }
 .theme-dark .main-nav-tab--active::after { background: var(--theme-orange); }
+
+.is-hidden { display: none !important; }
+.course-workspace-tabs { display: flex; gap: 6px; margin: 0 0 18px; padding: 5px; border: 1px solid #d7dde2; border-radius: 10px; background: #fff; }
+.course-workspace-tabs button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 0; border-radius: 7px; color: #5D6D7E; background: transparent; font-size: 11px; font-weight: 750; }
+.course-workspace-tabs button.active { color: #fff; background: #5353D1; }
+.course-workspace-panel { padding: 0 42px 60px; max-width: 1720px; margin: 0 auto; }
+.course-tab-surface { width: 100%; height: auto; min-height: 640px; padding: 24px; border: 1px solid #d7dde2; border-radius: 12px; box-shadow: none; animation: none; }
+.export-schedule-button { min-width: 190px; }
+.export-schedule-button:disabled { opacity: .45; cursor: not-allowed; }
+.schedule-toolbar .toolbar-actions { flex: 1; justify-content: center; }
+.schedule-toolbar .search-control { width: min(620px, 58vw); margin-left: auto; }
+.table-head, .time-cell, .day-cell { border-color: #000 !important; }
+.table-row::after { background: #000; }
+.theme-dark .table-head, .theme-dark .time-cell, .theme-dark .day-cell { border-color: #fff !important; }
+.theme-dark .table-row::after { background: #fff; }
+.theme-dark .course-workspace-tabs, .theme-dark .course-tab-surface { background: #283747; border-color: #5D6D7E; }
+.grade-chart-toggles { display: flex; align-items: center; gap: 8px; }
+.grade-chart-toggles > .grade-segment { width: 210px; }
+.grade-chart-legend--single-line { max-width: none; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; margin: 10px 0 2px; padding: 7px 0; white-space: nowrap; }
+.grade-chart-legend--single-line > span { flex: 0 0 auto; }
+.grade-chart-legend--single-line b { color: #3d5868; font-size: 9px; }
+.theme-dark .grade-chart-legend--single-line b { color: #f7f7f7; }
+.grade-report-filter-row { display: flex; align-items: flex-end; gap: 8px; overflow-x: auto; }
+.grade-report-filter-row > .grade-filters { flex: 1 0 auto; flex-wrap: nowrap; margin: 0; }
+.grade-report-view-switch { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 0; padding: 12px 14px; border-left: 3px solid #5353D1; }
+.grade-report-view-switch > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.grade-report-view-switch > div:first-child span { color: #6f7e88; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.grade-report-view-switch > div:first-child strong { color: #283747; font-size: 13px; }
+.grade-report-view-switch .grade-segment { width: 280px; flex: 0 0 auto; }
+.theme-dark .grade-report-view-switch > div:first-child strong { color: #f7f7f7; }
+.grade-report-section-heading > select { height: 30px; padding: 0 26px 0 8px; border: 1px solid #ced9e0; border-radius: 7px; color: #283747; background: #fff; font-size: 9px; font-weight: 750; }
+.grade-classification-rule__controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grade-range-select { position: relative; }
+.grade-range-select summary { height: 38px; display: flex; align-items: center; padding: 0 10px; border: 1px solid #ced9e0; border-radius: 7px; color: #283747; background: #fff; cursor: pointer; list-style: none; text-transform: none; letter-spacing: 0; }
+.grade-range-select > div { position: absolute; z-index: 30; top: 42px; right: 0; width: 150px; padding: 7px; border: 1px solid #ced9e0; border-radius: 8px; background: #fff; box-shadow: 0 12px 24px rgba(40,55,71,.16); }
+.grade-range-select label { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 6px; color: #283747; font-size: 10px; text-transform: none; letter-spacing: 0; }
+.grade-classification-rule__controls .grade-range-select input[type="checkbox"] { width: 14px; height: 14px; flex: 0 0 14px; margin: 0; padding: 0; border: 0; border-radius: 3px; accent-color: #5353D1; }
+.theme-dark .grade-range-select summary, .theme-dark .grade-range-select > div, .theme-dark .grade-report-section-heading > select { color: #f7f7f7; background: #283747; border-color: #5D6D7E; }
+@media (max-width: 720px) {
+  .grade-report-view-switch { align-items: stretch; flex-direction: column; }
+  .grade-report-view-switch .grade-segment { width: 100%; }
+}
+.grade-report-action > div { display: flex; gap: 8px; }
+.grade-email-backdrop { position: fixed; inset: 0; z-index: 70; display: flex; justify-content: flex-end; background: rgba(40,55,71,.35); }
+.grade-email-drawer { width: min(620px, 96vw); height: 100%; overflow-y: auto; padding: 24px; color: #283747; background: #fff; box-shadow: -12px 0 32px rgba(40,55,71,.2); }
+.grade-email-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid #dbe3e8; }
+.grade-email-head span { color: #F58342; font-size: 9px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.grade-email-head h2 { margin-top: 5px; font-size: 20px; }
+.grade-email-head p { margin-top: 5px; color: #71808b; font-size: 10px; }
+.grade-email-head > button { width: 30px; height: 30px; border: 0; border-radius: 7px; color: #5D6D7E; background: #F7F7F7; font-size: 20px; }
+.grade-email-field { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; color: #5D6D7E; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.grade-email-field input, .grade-email-field textarea { padding: 9px; border: 1px solid #ced9e0; border-radius: 7px; color: #283747; background: #fff; font-size: 10px; text-transform: none; }
+.grade-email-course-list { margin: 16px 0; border: 1px solid #dbe3e8; border-radius: 9px; }
+.grade-email-course-list label { display: flex; align-items: center; gap: 9px; padding: 10px; }
+.grade-email-course-list label + label { border-top: 1px solid #e7ecef; }
+.grade-email-course-list span { display: flex; flex-direction: column; gap: 2px; }
+.grade-email-course-list strong { font-size: 10px; }
+.grade-email-course-list small { color: #7a8993; font-size: 9px; }
+.grade-email-back { margin: 14px 0; padding: 0; border: 0; color: #5353D1; background: transparent; font-size: 10px; font-weight: 750; }
+.grade-email-drafts { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+.grade-email-drafts article { padding: 12px; border: 1px solid #dbe3e8; border-radius: 9px; background: #F7F7F7; }
+.grade-email-drafts article > div { display: flex; flex-direction: column; gap: 3px; }
+.grade-email-drafts small { color: #5D6D7E; font-size: 8px; }
+.grade-email-drafts pre { max-height: 220px; overflow: auto; padding: 9px; color: #283747; background: #fff; font: 9px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+.grade-email-drafts a { color: #5353D1; font-size: 10px; font-weight: 750; }
+.theme-dark .grade-email-drawer, .theme-dark .grade-email-drafts article, .theme-dark .grade-email-field input, .theme-dark .grade-email-field textarea, .theme-dark .grade-email-drafts pre { color: #F7F7F7; background: #283747; border-color: #5D6D7E; }

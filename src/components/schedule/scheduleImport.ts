@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { prerequisitePairs } from "./prerequisiteData";
 import { ccesCourseCatalog } from "./courseCatalogData";
+import { collegeProfessors } from "./collegeProfessors";
 
 export type Campus = "Female" | "Male";
 export type ConflictType = "room" | "instructor" | "course" | "capacity" | "prerequisite";
@@ -106,6 +107,9 @@ const catalogTitlesByCode = new Map<string, string[]>();
 ccesCourseCatalog.forEach((item) => {
   catalogTitlesByCode.set(item.code, [...(catalogTitlesByCode.get(item.code) ?? []), item.title]);
 });
+const professorNames = Object.values(collegeProfessors).flat();
+const professorNamesByNormalizedName = new Map(professorNames.map((name) => [name.trim().toLowerCase(), name]));
+const canonicalProfessorName = (name: string) => professorNamesByNormalizedName.get(name.trim().toLowerCase()) ?? name.trim();
 
 export function canonicalCourseTitle(code: string, title: string) {
   const options = catalogTitlesByCode.get(code);
@@ -214,7 +218,7 @@ export async function parseScheduleFile(file: File): Promise<ScheduleCourse[]> {
       section: cleanIdentifier(record["SEQUENCE NUMBER"]),
       name,
       college: department === "ASSE" ? getAsseCollege(name) : getCollege(department),
-      instructor: String(record.Instructor || "Unassigned").trim(),
+      instructor: canonicalProfessorName(String(record.Instructor || "Unassigned")),
       room: String(record.ROOM || "-").trim(),
       roomType: /\b(lab|laboratory|studio|clinical|practicum|workshop)\b/i.test(name) ? "Lab" as const : "Lecture" as const,
       gender: campusCode.startsWith("F") ? "Female" as const : "Male" as const,
@@ -242,6 +246,7 @@ export function recalculateConflicts(courses: ScheduleCourse[]) {
     ...course,
     name: canonicalCourseTitle(course.code, course.name),
     college: getCourseCollege(course),
+    instructor: canonicalProfessorName(course.instructor),
     conflicts: [] as ConflictType[],
     conflictDetails: [] as string[],
   }));

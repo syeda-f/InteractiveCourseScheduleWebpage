@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import GradeAnalysis from "./GradeAnalysis";
@@ -18,6 +20,7 @@ import {
 type College = "CCES" | "COBA" | "COE" | "COAD" | "CSHS" | "COL";
 type Course = ScheduleCourse;
 type ActiveView = "courses" | "grades" | "exams";
+type CourseWorkspaceView = "schedule" | "conflicts" | "add";
 type SectionRecommendation = {
   course: Course;
   campus: Campus;
@@ -691,6 +694,8 @@ function CourseCard({
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveView>("courses");
+  const [courseWorkspaceView, setCourseWorkspaceView] = useState<CourseWorkspaceView>("schedule");
+  const [userAddedSections, setUserAddedSections] = useState(0);
   const [courses, setCourses] = useState<ScheduleCourse[]>(() => recalculateConflicts(initialCourses));
   const [exams, setExams] = useState<Exam[]>(initialExams);
   const [scheduleSemesters, setScheduleSemesters] = useState<ScheduleSemesterEntry[]>([]);
@@ -729,11 +734,7 @@ export default function App() {
       .catch((error) => { if (loadId === scheduleLoadId.current) setScheduleLoadError(error instanceof Error ? error.message : "Unable to load semester"); });
   }, [scheduleSemester]);
 
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const savedTheme = window.localStorage.getItem("schedule-theme");
-    if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   // Course schedule filters
   const [colleges, setColleges] = useState<string[]>(["CCES"]);
@@ -769,8 +770,6 @@ export default function App() {
     Array.from(new Set(ccesCourseCatalog.map((item) => item.code)))
   );
   const [configCategories, setConfigCategories] = useState({ MATH: true, GEIT: true, Electives: true });
-  const [showRecommendations, setShowRecommendations] = useState(false);
-  const [showConflictReport, setShowConflictReport] = useState(false);
   const [conflictReportSnapshot, setConflictReportSnapshot] = useState<ScheduleCourse[] | null>(null);
   const [includedConflictTypes, setIncludedConflictTypes] = useState<ConflictType[]>([]);
   const [conflictReportColleges, setConflictReportColleges] = useState<string[]>(["CCES"]);
@@ -800,6 +799,12 @@ export default function App() {
   const [selectedExamDay, setSelectedExamDay] = useState<string>("All days");
   const [visibleExamDays, setVisibleExamDays] = useState<string[]>([...EXAM_DAYS]);
   const [showExamColumnPicker, setShowExamColumnPicker] = useState(false);
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("schedule-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+    else if (window.matchMedia("(prefers-color-scheme: dark)").matches) setTheme("dark");
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("schedule-theme", theme);
@@ -1292,7 +1297,8 @@ export default function App() {
       conflicts: [],
     };
     setCourses((current) => recalculateConflicts([...current, newCourse]));
-    setShowRecommendations(false);
+    setUserAddedSections((count) => count + 1);
+    setCourseWorkspaceView("schedule");
   };
 
   const examOptionPool = useMemo(
@@ -1391,16 +1397,6 @@ export default function App() {
             <Icon name={theme === "light" ? "moon" : "sun"} />
             {theme === "light" ? "Dark mode" : "Light mode"}
           </Button>
-          {activeTab === "courses" && (
-            <>
-              <Button variant="secondary" onClick={() => { setConflictReportSnapshot(null); setShowConflictReport(true); }}>
-                <Icon name="fileText" /> Generate conflict report
-              </Button>
-              <Button onClick={() => setShowRecommendations(true)}>
-                <Icon name="plus" /> Add section
-              </Button>
-            </>
-          )}
         </div>
       </header>
 
@@ -1438,9 +1434,16 @@ export default function App() {
             <b>{exams.length} exams</b>
           </button>
         </nav>
+        {activeTab === "courses" && (
+          <nav className="course-workspace-tabs" role="tablist" aria-label="Course schedule tools">
+            <button className={courseWorkspaceView === "schedule" ? "active" : ""} onClick={() => setCourseWorkspaceView("schedule")}><Icon name="calendar" size={15} /> Schedule</button>
+            <button className={courseWorkspaceView === "conflicts" ? "active" : ""} onClick={() => { setConflictReportSnapshot(null); setCourseWorkspaceView("conflicts"); }}><Icon name="fileText" size={15} /> Conflict Report</button>
+            <button className={courseWorkspaceView === "add" ? "active" : ""} onClick={() => setCourseWorkspaceView("add")}><Icon name="plus" size={15} /> Add Section</button>
+          </nav>
+        )}
 
         {activeTab === "courses" ? (
-          <>
+          <div className={courseWorkspaceView === "schedule" ? "" : "is-hidden"}>
             <section className="page-intro">
               <div>
                 <div className="eyebrow">
@@ -1478,8 +1481,8 @@ export default function App() {
               <div className="import-actions">
                 <FileImport label="Male schedule" campus="Male" onImport={handleImport} />
                 <FileImport label="Female schedule" campus="Female" onImport={handleImport} />
-                <Button variant="secondary" onClick={() => exportCampusSchedule("Male")}><Icon name="fileText" size={15} /> Export male</Button>
-                <Button variant="secondary" onClick={() => exportCampusSchedule("Female")}><Icon name="fileText" size={15} /> Export female</Button>
+                <button className="import-button export-schedule-button" disabled={!userAddedSections} onClick={() => exportCampusSchedule("Male")}><span className="import-icon"><Icon name="fileText" size={15} /></span><span><strong>Export male schedule</strong><small>{userAddedSections ? "Includes user-added sections" : "Add a section to enable"}</small></span></button>
+                <button className="import-button export-schedule-button" disabled={!userAddedSections} onClick={() => exportCampusSchedule("Female")}><span className="import-icon"><Icon name="fileText" size={15} /></span><span><strong>Export female schedule</strong><small>{userAddedSections ? "Includes user-added sections" : "Add a section to enable"}</small></span></button>
               </div>
             </section>
 
@@ -1764,7 +1767,7 @@ export default function App() {
                 </div>
               </div>
             </section>
-          </>
+          </div>
         ) : activeTab === "grades" ? (
           <GradeAnalysis mergeEnabled={mergeCrossListed} onMergeChange={setMergeCrossListed} />
         ) : (
@@ -2353,9 +2356,9 @@ export default function App() {
       )}
 
       {/* Add Section Drawer */}
-      {showRecommendations && (
-        <div className="drawer-backdrop" onMouseDown={() => setShowRecommendations(false)}>
-          <aside className="recommendation-drawer" onMouseDown={(event) => event.stopPropagation()}>
+      {activeTab === "courses" && courseWorkspaceView === "add" && (
+        <div className="course-workspace-panel">
+          <aside className="recommendation-drawer course-tab-surface">
             <div className="drawer-head">
               <div>
                 <span className="eyebrow">
@@ -2363,7 +2366,7 @@ export default function App() {
                 </span>
                 <h2>Add a new section</h2>
               </div>
-              <button className="close-button" onClick={() => setShowRecommendations(false)} aria-label="Close">
+              <button className="close-button" onClick={() => setCourseWorkspaceView("schedule")} aria-label="Close">
                 <Icon name="close" />
               </button>
             </div>
@@ -2474,6 +2477,22 @@ export default function App() {
                         if (!checked && (category === "MATH" || category === "GEIT")) {
                           setConfiguredCourses((current) => current.filter((code) => !code.startsWith(`${category} `)));
                         }
+                        if (!checked && category === "Electives") {
+                          setConfiguredCourses((current) => current.filter((code) => {
+                            const prefix = getCourseParts(code).prefix;
+                            return prefix === "MATH" || prefix === "GEIT" || selectedCcesMajors.includes(prefix as CcesMajor);
+                          }));
+                        }
+                        if (checked) {
+                          const categoryCodes = configurableCourseOptions
+                            .filter((item) => {
+                              const prefix = getCourseParts(item.code).prefix;
+                              if (category === "MATH" || category === "GEIT") return prefix === category;
+                              return prefix !== "MATH" && prefix !== "GEIT" && !selectedCcesMajors.includes(prefix as CcesMajor);
+                            })
+                            .map((item) => item.code);
+                          setConfiguredCourses((current) => [...new Set([...current, ...categoryCodes])]);
+                        }
                       }}
                     />
                     <span>{category}</span>
@@ -2488,16 +2507,16 @@ export default function App() {
       )}
 
       {/* Course Conflict Report Drawer */}
-      {showConflictReport && (
-        <div className="drawer-backdrop" onMouseDown={() => setShowConflictReport(false)}>
-          <aside className="conflict-report-drawer" onMouseDown={(event) => event.stopPropagation()}>
+      {activeTab === "courses" && courseWorkspaceView === "conflicts" && (
+        <div className="course-workspace-panel">
+          <aside className="conflict-report-drawer course-tab-surface">
             <div className="drawer-head">
               <div>
                 <span className="eyebrow"><Icon name="fileText" size={14} /> Schedule audit</span>
                 <h2>Course conflict report</h2>
                 <p>Fall 2027 · Complete Course Schedule conflict analysis</p>
               </div>
-              <button className="close-button" onClick={() => setShowConflictReport(false)} aria-label="Close">
+              <button className="close-button" onClick={() => setCourseWorkspaceView("schedule")} aria-label="Close">
                 <Icon name="close" />
               </button>
             </div>
