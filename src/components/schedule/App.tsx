@@ -59,7 +59,7 @@ const DAY_LABELS: Record<string, string> = {
   Thursday: "R",
 };
 
-const SCHEDULE_API = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const SCHEDULE_API = process.env.NEXT_PUBLIC_API_URL || "https://pmu-data-analysis-portal-dap.onrender.com";
 const SCHEDULE_SEMESTER_KEY = "schedule.selectedSemester";
 type ScheduleSemesterEntry = { semester: string; campuses: Campus[] };
 async function scheduleApi<T>(path: string, options?: RequestInit): Promise<T> {

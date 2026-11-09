@@ -185,7 +185,7 @@ function parseGradeDataset(file: File, data: ArrayBuffer): SectionGradeRecord[] 
   });
   return records.map(uniformGradeRecord);
 }
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pmu-data-analysis-portal-dap.onrender.com";
 
 type BackendGradeRow = Record<string, unknown>;
 
