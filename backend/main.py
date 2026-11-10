@@ -231,6 +231,60 @@ async def import_grades(
     }
 
 
+@app.post("/api/grades/import-batch")
+async def import_grades_batch(
+    files: list[UploadFile] = File(...),
+    replace_existing: bool = Form(False),
+):
+    """Import any number of independent grade CSVs, across multiple semesters.
+
+    Each file is handled separately: one malformed file does not block others.
+    A matching semester/source is replaced only with explicit permission.
+    """
+    from io import BytesIO
+
+    if not files:
+        raise HTTPException(status_code=422, detail="Select at least one CSV file")
+
+    imported, errors = [], []
+    for upload in files:
+        filename = upload.filename or "unnamed.csv"
+        try:
+            if not filename.lower().endswith(".csv"):
+                raise ValueError("Only CSV files are supported")
+            contents = await upload.read()
+            if not contents:
+                raise ValueError("Empty CSV file")
+            # Filename-based classification is deliberately conservative. Ambiguous
+            # sources must be renamed or explicitly classified, never silently guessed.
+            name = filename.lower()
+            if "female" in name:
+                source = "female"
+            elif "male" in name:
+                source = "male"
+            elif "combined" in name and "section" in name:
+                source = "combined_sections"
+            elif any(term in name for term in ("course", "merged", "grades")):
+                source = "courses"
+            else:
+                raise ValueError("Cannot identify source type from filename. Include Male, Female, Combined Sections, or Course in the filename")
+
+            fresh = UploadFile(filename=filename, file=BytesIO(contents))
+            term = detect_grade_semester([fresh])
+            fresh.file.seek(0)
+            args = {"male": None, "female": None, "courses": None, "combined_sections": None}
+            args[source] = fresh
+            result = await import_grades(
+                **args, replace_existing=replace_existing, semester=term
+            )
+            imported.append({"filename": filename, "semester": term, "source": source, "result": result})
+        except HTTPException as exc:
+            errors.append({"filename": filename, "error": str(exc.detail)})
+        except (ValueError, OSError, UnicodeError) as exc:
+            errors.append({"filename": filename, "error": str(exc)})
+    return {"imported": imported, "errors": errors, "total": len(files)}
+
+
 # Course Scheduling: durable, per-semester and per-campus processed records.
 # Store JSON to preserve array-valued meeting days and conflict details exactly.
 SCHEDULES_DIR = OUTPUT_DIR / "schedules"

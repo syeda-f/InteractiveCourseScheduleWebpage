@@ -22,8 +22,13 @@ const allGrades: Grade[] = [...grades, "P"];
 const gradeColors = ["#258C70", "#34805B", "#3E78CE", "#315FC5", "#D17829", "#B86428", "#D75A2B", "#C73C3C", "#7E6C91"];
 const sectionColors = ["#2E78A4", "#D85E9C"];
 const semesterColors = ["#4055D6", "#E67E3F", "#258C70", "#A04B8B", "#C44545", "#2E78A4", "#8A6A2F", "#5C6BC0"];
-const semesterLabels: Record<string, string> = { "202510": "Fall 2025" };
-const semesterLabel = (code: string) => semesterLabels[code] ?? code;
+const CCES_DEPARTMENTS = new Set(["ITAP", "COEN", "COSC", "SOEN", "AINT", "CSEC", "GEIT"]);
+const semesterLabel = (code: string) => {
+  const match = /^(\d{4})(10|20|30)$/.exec(code.trim());
+  if (!match) return code;
+  const academicYear = Number(match[1]);
+  return match[2] === "10" ? `FALL ${academicYear}` : match[2] === "20" ? `SPRING ${academicYear}` : `SUMMER ${academicYear}`;
+};
 const gradeLabels: Record<Exclude<Grade, "P">, string> = {
   "A+": "A+",
   A: "A",
@@ -185,7 +190,7 @@ function parseGradeDataset(file: File, data: ArrayBuffer): SectionGradeRecord[] 
   });
   return records.map(uniformGradeRecord);
 }
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pmu-data-analysis-portal-dap.onrender.com";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type BackendGradeRow = Record<string, unknown>;
 
@@ -219,6 +224,13 @@ async function requestGradeSections(merged: boolean): Promise<SectionGradeRecord
     const error = await response.json().catch(() => ({}));
     throw new Error(error.detail ?? `Unable to load grades (${response.status}).`);
   }
+  const rows: BackendGradeRow[] = await response.json();
+  return rows.map(backendToSection);
+}
+
+async function requestGradeCourses(merged: boolean): Promise<SectionGradeRecord[]> {
+  const response = await fetch(`${API_BASE}/api/grades?merge=${merged}&record_type=course`);
+  if (!response.ok) throw new Error(`Unable to load course grades (${response.status}).`);
   const rows: BackendGradeRow[] = await response.json();
   return rows.map(backendToSection);
 }
@@ -363,74 +375,79 @@ function SemesterComparisonChart({
   data,
   mode,
   selectedGrades,
+  course,
 }: {
   data: SemesterComparisonRecord[];
   mode: DisplayMode;
   selectedGrades: Grade[];
+  course: string;
 }) {
+  const [hoveredSemester, setHoveredSemester] = useState<string | null>(null);
   const width = 920;
-  const height = 310;
-  const padding = { top: 22, right: 26, bottom: 52, left: 58 };
+  const height = 355;
+  const padding = { top: 28, right: 30, bottom: 78, left: 66 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const valueFor = (record: SemesterComparisonRecord, grade: Grade) => mode === "Percentage"
     ? (record.totalStudents ? record.grades[grade] / record.totalStudents * 100 : 0)
     : record.grades[grade];
-  const rawMaximum = Math.max(0, ...data.flatMap((record) => selectedGrades.map((grade) => valueFor(record, grade))));
+  const available = data.filter((record) => record.totalStudents > 0);
+  const rawMaximum = Math.max(0, ...available.flatMap((record) => selectedGrades.map((grade) => valueFor(record, grade))));
   const maximum = mode === "Percentage"
     ? Math.max(10, Math.min(100, Math.ceil(rawMaximum / 10) * 10))
     : Math.max(5, Math.ceil(rawMaximum / 5) * 5);
   const xPosition = (index: number) => padding.left + (data.length === 1 ? plotWidth / 2 : index / (data.length - 1) * plotWidth);
   const yPosition = (value: number) => padding.top + plotHeight - value / maximum * plotHeight;
-  const ticks = [0, 1, 2, 3, 4];
+  const hoveredIndex = data.findIndex((record) => record.semester === hoveredSemester);
+  const hoveredRecord = hoveredIndex >= 0 ? data[hoveredIndex] : null;
+  const hitWidth = Math.min(110, plotWidth / Math.max(1, data.length));
 
   return (
-    <div className="grade-semester-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Selected course grade distribution by semester">
-        <text x={-height / 2} y="15" transform="rotate(-90)" textAnchor="middle" className="grade-semester-chart__axis-label">{mode}</text>
-        {ticks.map((tick) => {
+    <div className="grade-semester-chart" style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${course} grade trends by semester`} style={{ width: "100%", height: "auto", overflow: "visible" }} onMouseLeave={() => setHoveredSemester(null)}>
+        <text x={-height / 2} y="17" transform="rotate(-90)" textAnchor="middle" className="grade-semester-chart__axis-label">{mode}</text>
+        {[0, 1, 2, 3, 4].map((tick) => {
           const value = maximum * tick / 4;
           const y = yPosition(value);
-          return (
-            <g key={tick}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="grade-semester-chart__grid" />
-              <text x={padding.left - 10} y={y + 3} textAnchor="end" className="grade-semester-chart__tick">
-                {mode === "Percentage" ? `${value.toFixed(0)}%` : Math.round(value)}
-              </text>
-            </g>
-          );
+          return <g key={tick}>
+            <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} className="grade-semester-chart__grid" />
+            <text x={padding.left - 10} y={y + 4} textAnchor="end" className="grade-semester-chart__tick">{mode === "Percentage" ? `${value.toFixed(0)}%` : Math.round(value)}</text>
+          </g>;
         })}
-        {data.map((record, index) => {
-          const x = xPosition(index);
-          return (
-            <g key={record.semester}>
-              <line x1={x} x2={x} y1={padding.top} y2={padding.top + plotHeight} className="grade-semester-chart__semester-line" style={{ stroke: record.color }} />
-              <circle cx={x} cy={padding.top + plotHeight} r="4.5" fill={record.color} />
-              <text x={x} y={height - 25} textAnchor="middle" className="grade-semester-chart__semester" style={{ fill: record.color }}>{record.label}</text>
-              <text x={x} y={height - 10} textAnchor="middle" className="grade-semester-chart__students">{record.totalStudents.toLocaleString()} students</text>
-            </g>
-          );
-        })}
+        {data.map((record, index) => <text key={record.semester} x={xPosition(index)} y={height - 43} textAnchor="middle" className="grade-semester-chart__semester">{record.label}</text>)}
+        {hoveredIndex >= 0 && <line x1={xPosition(hoveredIndex)} x2={xPosition(hoveredIndex)} y1={padding.top} y2={padding.top + plotHeight} stroke="#94A3B8" strokeDasharray="5 5" />}
         {selectedGrades.map((grade) => {
-          const gradeIndex = grades.indexOf(grade);
-          const points = data.map((record, index) => `${xPosition(index)},${yPosition(valueFor(record, grade))}`).join(" ");
-          return (
-            <g key={grade}>
-              <polyline points={points} fill="none" stroke={gradeColors[gradeIndex]} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-              {data.map((record, index) => {
-                const value = valueFor(record, grade);
-                return (
-                  <circle key={record.semester} cx={xPosition(index)} cy={yPosition(value)} r="4" fill="#fff" stroke={gradeColors[gradeIndex]} strokeWidth="2.5">
-                    <title>{`${record.label} · ${comparisonGradeLabel(grade)}: ${mode === "Percentage" ? `${value.toFixed(1)}%` : `${Math.round(value)} students`}`}</title>
-                  </circle>
-                );
-              })}
-            </g>
-          );
+          const color = gradeColors[grades.indexOf(grade)];
+          // Break the line at semesters without records rather than showing a false zero.
+          const segments: SemesterComparisonRecord[][] = [];
+          let segment: SemesterComparisonRecord[] = [];
+          data.forEach((record) => {
+            if (record.totalStudents > 0) segment.push(record);
+            else if (segment.length) { segments.push(segment); segment = []; }
+          });
+          if (segment.length) segments.push(segment);
+          return <g key={grade}>
+            {segments.map((part, partIndex) => <polyline key={partIndex} points={part.map((record) => `${xPosition(data.indexOf(record))},${yPosition(valueFor(record, grade))}`).join(" ")} fill="none" stroke={color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />)}
+            {data.map((record, index) => record.totalStudents > 0 && <circle
+              key={record.semester}
+              cx={xPosition(index)} cy={yPosition(valueFor(record, grade))}
+              r={hoveredSemester === record.semester ? 5.5 : 4}
+              fill="#fff" stroke={color} strokeWidth="2.5"
+              onMouseEnter={() => setHoveredSemester(record.semester)}
+            ><title>{`${course} · ${record.label} · ${comparisonGradeLabel(grade)}: ${mode === "Percentage" ? `${valueFor(record, grade).toFixed(1)}%` : `${record.grades[grade]} students`}`}</title></circle>)}
+          </g>;
         })}
+        {data.map((record, index) => <rect key={`hit-${record.semester}`} x={xPosition(index) - hitWidth / 2} y={padding.top} width={hitWidth} height={plotHeight} fill="transparent" onMouseEnter={() => setHoveredSemester(record.semester)} style={{ cursor: "crosshair" }} />)}
       </svg>
       <div className="grade-semester-chart__x-label">Semester</div>
-      <div className="grade-semester-chart__grade-key" aria-label="Displayed grade categories">
+      {hoveredRecord && <div role="status" style={{ position: "absolute", top: 8, left: hoveredIndex >= data.length / 2 ? "2%" : "auto", right: hoveredIndex < data.length / 2 ? "2%" : "auto", zIndex: 3, background: "#fff", color: "#18243B", border: "1px solid #CBD5E1", borderRadius: 10, padding: "12px 15px", boxShadow: "0 8px 24px #0002", minWidth: 210, pointerEvents: "none" }}>
+        <strong>{course} · {hoveredRecord.label}</strong>
+        {selectedGrades.map((grade) => <div key={grade} style={{ display: "flex", justifyContent: "space-between", gap: 18, marginTop: 7 }}>
+          <span><span style={{ color: gradeColors[grades.indexOf(grade)] }}>●</span> {comparisonGradeLabel(grade)}</span>
+          <strong>{hoveredRecord.totalStudents === 0 ? "N/A" : mode === "Percentage" ? `${valueFor(hoveredRecord, grade).toFixed(1)}%` : `${hoveredRecord.grades[grade]} students`}</strong>
+        </div>)}
+      </div>}
+      <div className="grade-semester-chart__grade-key" aria-label="Grade line colors">
         {selectedGrades.map((grade) => <span key={grade}><i style={{ background: gradeColors[grades.indexOf(grade)] }} />{comparisonGradeLabel(grade)}</span>)}
       </div>
     </div>
@@ -473,8 +490,9 @@ function CohortChart({ initialRecord, initialMode }: { initialRecord: GradeRecor
 }
 
 export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEnabled: boolean; onMergeChange: (merged: boolean) => void }) {
-  const [gradeRecords, setGradeRecords] = useState<SectionGradeRecord[]>(() => combineSectionGradeRows(sectionGradeData.map(uniformGradeRecord)));
+  const [gradeRecords, setGradeRecords] = useState<SectionGradeRecord[]>(() => combineSectionGradeRows(sectionGradeData.map(uniformGradeRecord)).filter((record) => CCES_DEPARTMENTS.has(record.department.toUpperCase())));
   const [activePanel, setActivePanel] = useState<"analysis" | "report">("analysis");
+  const [courseGradeRecords, setCourseGradeRecords] = useState<SectionGradeRecord[]>([]);
   const [reportMode, setReportMode] = useState<ReportMode>("course");
   const [filters, setFilters] = useState({ semesters: ["202510"], department: "All", course: "GEIT 1411", instructor: "All", campus: "All", mode: "Student Count" as DisplayMode });
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
@@ -506,9 +524,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   const [chairEmails, setChairEmails] = useState("mkhan@pmu.edu.sa, sabdulrahman@pmu.edu.sa, nmohammad@pmu.edu.sa");
   const [senderEmail, setSenderEmail] = useState("mkhan@pmu.edu.sa");
   const [sendingEmails, setSendingEmails] = useState(false);
-  const [showImportPanel, setShowImportPanel] = useState(false);
-  const [importSemester, setImportSemester] = useState("");
-  const [importFiles, setImportFiles] = useState<Partial<Record<"male" | "female" | "courses" | "combined_sections", File>>>({});
+  const importInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
 
   const showToast = (type: "success" | "error" | "info", message: string) => {
@@ -517,14 +533,16 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
   };
 
-  const applyRecords = (records: SectionGradeRecord[]) => {
-    setGradeRecords(combineSectionGradeRows(records.map(uniformGradeRecord)));
+  const applyRecords = (records: SectionGradeRecord[], courseRows?: SectionGradeRecord[]) => {
+    if (courseRows) setCourseGradeRecords(courseRows.filter((record) => CCES_DEPARTMENTS.has(record.department.toUpperCase())));
+    setGradeRecords(combineSectionGradeRows(records.map(uniformGradeRecord)).filter((record) => CCES_DEPARTMENTS.has(record.department.toUpperCase())));
     setSelectedSections([]);
     setExpandedCohort(null);
     setReportGenerated(false);
+    const availableTerms = new Set([...records, ...(courseRows ?? courseGradeRecords)].map((record) => record.semester));
     setFilters((current) => ({
       ...current,
-      semesters: current.semesters.filter((semester) => records.some((record) => record.semester === semester)).length ? current.semesters.filter((semester) => records.some((record) => record.semester === semester)) : [records[0]?.semester ?? "202510"],
+      semesters: current.semesters.filter((semester) => availableTerms.has(semester)).length ? current.semesters.filter((semester) => availableTerms.has(semester)) : [[...availableTerms].sort()[0] ?? "202510"],
       department: "All",
       course: "All",
       instructor: "All",
@@ -534,10 +552,10 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
 
   useEffect(() => {
     let cancelled = false;
-    requestGradeSections(mergeEnabled)
-      .then((records) => {
+    Promise.all([requestGradeSections(mergeEnabled), requestGradeCourses(mergeEnabled)])
+      .then(([records, courseRows]) => {
         if (cancelled) return;
-        applyRecords(records);
+        applyRecords(records, courseRows);
       })
       .catch(() => {
         // Keep the bundled example dataset until files are imported.
@@ -550,8 +568,8 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     setIsMerging(true);
     const next = !mergeEnabled;
     try {
-      const records = await requestGradeSections(next);
-      applyRecords(records);
+      const [records, courseRows] = await Promise.all([requestGradeSections(next), requestGradeCourses(next)]);
+      applyRecords(records, courseRows);
       onMergeChange(next);
       showToast("success", next ? "Merged cross-listed view enabled." : "Original course view restored.");
     } catch (error) {
@@ -561,59 +579,47 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     }
   };
 
-  const handleGradeImport = async () => {
-    if (isImporting) return;
-    const selected = Object.entries(importFiles).filter((entry): entry is [string, File] => Boolean(entry[1]));
-    if (!selected.length) {
-      showToast("error", "Select at least one CSV file to import.");
-      return;
-    }
-    if (selected.some(([, file]) => !file.name.toLowerCase().endsWith(".csv"))) {
-      showToast("error", "Only CSV files are supported.");
-      return;
-    }
-    if (importSemester.trim() && !/^20\d{4}$/.test(importSemester.trim())) {
-      showToast("error", "Semester must be a six-digit code beginning with 20.");
-      return;
-    }
+  const handleGradeImport = async (files?: FileList | null) => {
+    if (!files?.length || isImporting) return;
     setIsImporting(true);
     try {
-      const form = new FormData();
-      selected.forEach(([field, file]) => form.append(field, file));
-      if (importSemester.trim()) form.append("semester", importSemester.trim());
-      let response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
-      if (response.status === 409) {
-        const conflict = await response.json().catch(() => ({}));
-        if (!window.confirm(`${conflict.detail ?? "These datasets already exist."} Replace only the conflicting datasets?`)) return;
-        form.append("replace_existing", "true");
-        response = await fetch(`${API_BASE}/api/grades/import`, { method: "POST", body: form });
+      const selected = Array.from(files);
+      if (selected.some((file) => !file.name.toLowerCase().endsWith(".csv"))) {
+        throw new Error("Select CSV files only.");
       }
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(typeof error.detail === "string" ? error.detail : "Grade import failed.");
+      const upload = async (replaceExisting: boolean) => {
+        const form = new FormData();
+        selected.forEach((file) => form.append("files", file, file.name));
+        form.append("replace_existing", String(replaceExisting));
+        const response = await fetch(`${API_BASE}/api/grades/import-batch`, { method: "POST", body: form });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Grade batch import failed.");
+        return result as { imported: Array<{ filename: string; semester: string; source: string }>; errors: Array<{ filename: string; error: string }> };
+      };
+      let result = await upload(false);
+      if (result.errors.some((item) => item.error.includes("already imported"))) {
+        if (window.confirm("Some datasets are already imported. Replace only those matching semester/source datasets?")) {
+          result = await upload(true);
+        }
       }
-      const result: { semester: string; imported?: string[] } = await response.json();
-      // Section-level records refresh independently. A courses-only import
-      // remains saved on the server and available through record_type=course.
-      try {
-        const records = await requestGradeSections(mergeEnabled);
-        applyRecords(records);
-      } catch (refreshError) {
-        console.warn("Grade import succeeded but the section dashboard could not refresh:", refreshError);
+      if (result.imported.length) {
+        const [records, courseRows] = await Promise.all([requestGradeSections(mergeEnabled), requestGradeCourses(mergeEnabled)]);
+        applyRecords(records, courseRows);
+        const importedSemesters = [...new Set(result.imported.map((item) => item.semester))];
+        setFilters((current) => ({ ...current, semesters: importedSemesters }));
       }
-      setFilters((current) => ({ ...current, semesters: [result.semester] }));
-      setImportFiles({});
-      setShowImportPanel(false);
-      showToast("success", `Imported ${(result.imported ?? selected.map(([key]) => key)).join(", ")} for semester ${result.semester}.`);
+      const errors = result.errors.map((item) => `${item.filename}: ${item.error}`);
+      showToast(errors.length ? "error" : "success", `${result.imported.length} file(s) imported, ${errors.length} failed.${errors.length ? " " + errors.slice(0, 2).join(" | ") : ""}`);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Unable to import grade files.");
     } finally {
       setIsImporting(false);
+      if (importInputRef.current) importInputRef.current.value = "";
     }
   };
 
-  const semesterOptions = useMemo(() => [...new Set(gradeRecords.map((record) => record.semester))].sort(), [gradeRecords]);
-  const courseOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester)).map((record) => record.course))]
+  const semesterOptions = useMemo(() => [...new Set([...gradeRecords, ...courseGradeRecords].map((record) => record.semester))].sort(), [gradeRecords, courseGradeRecords]);
+  const courseOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase())).map((record) => record.course))]
     .map((course) => {
       const records = gradeRecords.filter((record) => record.course === course);
       return {
@@ -624,7 +630,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       };
     })
     .sort((a, b) => a.course.localeCompare(b.course)), [filters.semesters, gradeRecords]);
-  const departmentOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester)).map((record) => record.department))].sort(), [filters.semesters, gradeRecords]);
+  const departmentOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester)).map((record) => record.department.toUpperCase()).filter((department) => CCES_DEPARTMENTS.has(department)))].sort(), [filters.semesters, gradeRecords]);
 
   const instructorOptions = useMemo(() => [...new Set(gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
@@ -718,7 +724,31 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     });
     return [...grouped.values()];
   }, [sections]);
-  const reportRecords = reportMode === "course" ? rankedCourses : sections;
+  // Prefer the actual uploaded course-grade datasets for course reports.
+  // For terms/campuses with section data only, retain section-derived aggregates.
+  const uploadedCourseReportRecords = useMemo(() => courseGradeRecords.filter((record) =>
+    filters.semesters.includes(record.semester) &&
+    (filters.department === "All" || record.department === filters.department) &&
+    (filters.course === "All" || record.course === filters.course) &&
+    (filters.campus === "All" || record.campus.startsWith(filters.campus))
+  ), [courseGradeRecords, filters.semesters, filters.department, filters.course, filters.campus]);
+  const courseReportRecords = useMemo(() => {
+    const groups = new Map<string, ChartSeries>();
+    const courseSourceKeys = new Set(uploadedCourseReportRecords.map((r) => `${r.semester}|${r.campus}|${r.course}`));
+    const sectionFallback = sections.filter((r) => !courseSourceKeys.has(`${r.semester}|${r.campus}|${r.course}`));
+    for (const record of [...uploadedCourseReportRecords, ...sectionFallback]) {
+      const key = record.course;
+      const previous = groups.get(key);
+      if (previous) {
+        previous.totalStudents += record.totalStudents;
+        allGrades.forEach((grade) => { previous.grades[grade] += record.grades[grade]; });
+      } else {
+        groups.set(key, { ...record, grades: { ...record.grades }, label: record.course });
+      }
+    }
+    return [...groups.values()];
+  }, [uploadedCourseReportRecords, sections]);
+  const reportRecords = reportMode === "course" ? courseReportRecords : sections;
   const reportPotentiallyEasy = useMemo(() => reportRecords
     .filter((record) => {
       const count = gradeRangeCount(record, highGradeRange);
@@ -950,7 +980,17 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     setFilters((current) => ({
       ...current,
       semesters,
-      course: courseAvailable ? current.course : "All",
+      course: (() => {
+        if (courseAvailable && current.course !== "All") return current.course;
+        if (semesters.length < 2) return "All";
+        const counts = new Map<string, Set<string>>();
+        gradeRecords.forEach((record) => {
+          if (!semesters.includes(record.semester) || !CCES_DEPARTMENTS.has(record.department.toUpperCase())) return;
+          if (!counts.has(record.course)) counts.set(record.course, new Set());
+          counts.get(record.course)!.add(record.semester);
+        });
+        return [...counts.entries()].filter(([, terms]) => terms.size >= 2).map(([course]) => course).sort()[0] ?? "All";
+      })(),
       instructor: "All",
       mode: semesters.length >= 2 && current.semesters.length < 2 ? "Percentage" : current.mode,
     }));
@@ -1005,67 +1045,23 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
             {isMerging ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="sections" />}
             {isMerging ? "Loading…" : mergeEnabled ? "Show Original Courses" : "Merge Cross-Listed Courses"}
           </button>
-          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging} onClick={() => setShowImportPanel((current) => !current)}>
-            <MiniIcon name="upload" /> {showImportPanel ? "Close Import" : "Import Files"}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            Select any number of CSV files; semester and source detected automatically
+          </label>
+          <input
+            ref={importInputRef}
+            className="sr-only"
+            type="file"
+            accept=".csv,text/csv"
+            multiple
+            onChange={(event) => void handleGradeImport(event.target.files)}
+          />
+          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging} onClick={() => importInputRef.current?.click()}>
+            {isImporting ? <span className="grade-button-spinner" aria-hidden="true" /> : <MiniIcon name="upload" />}
+            {isImporting ? "Importing…" : "Import Files"}
           </button>
         </div>
       </section>
-      {showImportPanel && (
-        <section className="grade-import-panel" style={{ padding: 16, marginBottom: 20, border: "1px solid #d5dbe5", borderRadius: 12 }}>
-          <label style={{ display: "block", marginBottom: 10 }}>
-            Select CSV files (up to four)
-            <input
-              style={{ display: "block", marginTop: 6 }}
-              type="file"
-              accept=".csv,text/csv"
-              multiple
-              disabled={isImporting}
-              onChange={(event) => {
-                const incoming = Array.from(event.target.files ?? []);
-                const classify = (name: string): keyof typeof importFiles | null => {
-                  const n = name.toLowerCase();
-                  if (/course|merged_male_female/.test(n) && !/section/.test(n)) return "courses";
-                  if (/combined.*section|section.*combined/.test(n)) return "combined_sections";
-                  if (/female/.test(n) && !/male.*female|female.*male/.test(n)) return "female";
-                  if (/male/.test(n) && !/female/.test(n)) return "male";
-                  return null;
-                };
-                const next: typeof importFiles = {};
-                const unknown: string[] = [];
-                const duplicates: string[] = [];
-                for (const file of incoming) {
-                  const key = classify(file.name);
-                  if (!key) { unknown.push(file.name); continue; }
-                  if (next[key]) { duplicates.push(file.name); continue; }
-                  next[key] = file;
-                }
-                setImportFiles(next);
-                if (unknown.length || duplicates.length) {
-                  showToast("error", `Could not assign: ${[...unknown, ...duplicates].join(", ")}. Rename files to identify courses, male, female, or combined sections.`);
-                }
-                event.target.value = "";
-              }}
-            />
-          </label>
-          {Object.entries(importFiles).filter(([, file]) => Boolean(file)).map(([kind, file]) => (
-            <div key={kind} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
-              <span>{kind.replaceAll("_", " ")}: {file?.name}</span>
-              <button type="button" className="grade-button grade-button--secondary" disabled={isImporting} onClick={() => setImportFiles((current) => {
-                const next = { ...current };
-                delete next[kind as keyof typeof next];
-                return next;
-              })}>Remove</button>
-            </div>
-          ))}
-          <label style={{ display: "block", marginTop: 10, marginBottom: 12 }}>
-            Semester code (only if not included in filenames)
-            <input style={{ display: "block", marginTop: 5, padding: 8 }} type="text" inputMode="numeric" placeholder="e.g. 202510" value={importSemester} onChange={(event) => setImportSemester(event.target.value)} />
-          </label>
-          <button className="grade-button grade-button--primary" disabled={isImporting || isMerging || !Object.values(importFiles).some(Boolean)} onClick={() => void handleGradeImport()}>
-            {isImporting ? "Importing…" : "Import Selected Files"}
-          </button>
-        </section>
-      )}
       {toast && <div className={`grade-toast grade-toast--${toast.type}`} role="status" aria-live="polite"><MiniIcon name={toast.type === "error" ? "alert" : toast.type === "success" ? "check" : "sections"} /><span>{toast.message}</span></div>}
 
       <div className="grade-view-tabs" role="tablist" aria-label="Grade analysis views">
@@ -1099,9 +1095,10 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
             <div className="grade-chart-toggles"><div className="grade-segment">{["All", "Male", "Female"].map((campus) => <button className={filters.campus === campus ? "active" : ""} onClick={() => { setReportGenerated(false); setFilters((current) => ({ ...current, campus })); }} key={campus}>{campus}</button>)}</div><MetricToggle mode={filters.mode} onChange={(mode) => setFilters((current) => ({ ...current, mode }))} /></div>
           </div>
         </div>
+        {filters.semesters.length >= 2 && !comparisonEnabled && <p role="status">Choose a course available in the selected semesters to display its comparison line chart. If no course is shared, import the missing semester's course data.</p>}
         {comparisonEnabled ? <>
-          <div className="grade-semester-legend" aria-label="Selected semesters">{semesterComparison.map((record) => <span key={record.semester}><i style={{ background: record.color }} /><b>{record.label}</b></span>)}</div>
-          <SemesterComparisonChart data={semesterComparison} mode={filters.mode} selectedGrades={comparisonGrades} />
+          <div className="grade-semester-legend" aria-label="Selected grade categories">{comparisonGrades.map((grade) => <span key={grade}><i style={{ background: gradeColors[grades.indexOf(grade)] }} /><b>{comparisonGradeLabel(grade)}</b></span>)}</div>
+          <SemesterComparisonChart data={semesterComparison} mode={filters.mode} selectedGrades={comparisonGrades} course={filters.course} />
         </> : <>
           <div className="grade-chart-legend grade-chart-legend--single-line">{chartSeries.map((section) => <span key={chartSeriesKey(section)}><i style={{ background: chartSeriesColor(section) }} /><b>{section.course} · Sec {section.section}</b></span>)}</div>
           <div className="grade-chart-wrap">
@@ -1182,6 +1179,16 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         </div>
       </section>
       <div className="grade-report-filter-row">{renderFilterControls()}</div>
+      <section className="grade-panel" style={{ padding: "14px 18px" }}>
+        <strong>Available uploaded data</strong>
+        <p style={{ margin: "8px 0 0" }}>
+          {semesterOptions.length ? semesterOptions.map((semester) => {
+            const sectionCount = gradeRecords.filter((record) => record.semester === semester).length;
+            const courseCount = courseGradeRecords.filter((record) => record.semester === semester).length;
+            return `${semesterLabel(semester)} (${semester}): ${sectionCount} sections, ${courseCount} course records`;
+          }).join(" · ") : "No uploaded semester data is available."}
+        </p>
+      </section>
       <section className="grade-panel grade-report grade-analysis-criteria">
         <div className="grade-report-section-heading"><span>01</span><div><h2>Analysis Criteria</h2><p>Choose when {reportMode === "course" ? "a course group" : "an individual section"} should be classified.</p></div></div>
         <div className="grade-classification-settings">

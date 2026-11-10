@@ -198,60 +198,126 @@ if __name__ == '__main__':
 SOURCE_NAMES = ('male', 'female', 'combined_sections', 'courses')
 
 
+def _read_grade_table(path):
+    """Read CSV or Excel exports without assuming the number of title rows."""
+    path = Path(path)
+    if path.suffix.lower() in ('.xlsx', '.xls'):
+        return pd.read_excel(path, header=None, dtype=str).dropna(how='all')
+    # utf-8-sig handles Excel's UTF-8 BOM; cp1252 is common in older exports.
+    try:
+        return pd.read_csv(path, header=None, dtype=str, encoding='utf-8-sig').dropna(how='all')
+    except UnicodeDecodeError:
+        return pd.read_csv(path, header=None, dtype=str, encoding='cp1252').dropna(how='all')
+
+
+def _header_name(value):
+    import re
+    return re.sub(r'[^a-z0-9+&]', '', str(value).lower())
+
+
+def _detect_grade_columns(raw, source):
+    """Locate semantic headers and grade COUNT columns (not percentages)."""
+    import re
+    aliases = {
+        'department': {'coursecode', 'department', 'dept', 'subject'},
+        'course_number': {'courseno', 'coursenumber', 'coursenum'},
+        'section_number': {'sectionno', 'sectionnumber', 'section'},
+        'course_title': {'coursetitle', 'coursename'},
+        'instructor': {'instructorname', 'instructor'},
+        'total_students': {'totalnoofstudents', 'totalstudents', 'studentcount', 'noofstudents'},
+        'campus': {'campusgender', 'campus', 'gender'},
+        'passing_count': {'passingrate', 'passingcount', 'passed'},
+        'withdraw_count': {'withdrawrate', 'withdrawalrate', 'withdrawcount', 'withdrawra'},
+    }
+    grade_names = {_header_name(grade): grade for grade in GRADES}
+    required = {'department', 'course_number', 'course_title', 'total_students'}
+    if source in ('male', 'female', 'combined_sections'):
+        required.add('section_number')
+    if source in ('combined_sections', 'courses'):
+        required.add('campus')
+    for row_number in range(min(len(raw), 30)):
+        cells = [_header_name(v) for v in raw.iloc[row_number].fillna('')]
+        mapping = {}
+        for i, name in enumerate(cells):
+            if not name:
+                continue
+            for field, options in aliases.items():
+                if name in options:
+                    mapping[field] = i
+            if name in grade_names:
+                mapping[grade_names[name]] = i
+        if not required.issubset(mapping) or not all(g in mapping for g in GRADES):
+            continue
+        # The grade header denotes the count column; the next '%' column is ignored.
+        # Validate the subheader when present to avoid accidentally using percentages.
+        if row_number + 1 < len(raw):
+            sub = [_header_name(v) for v in raw.iloc[row_number + 1].fillna('')]
+            for grade in GRADES:
+                idx = mapping[grade]
+                if idx < len(sub) and sub[idx] not in ('', 'no', 'number', 'count'):
+                    raise ValueError(f'{source}: grade {grade} is not a count column')
+        if 'passing_count' not in mapping or 'withdraw_count' not in mapping:
+            raise ValueError(f'{source}: missing passing or withdrawal count header')
+        if source != 'courses' and 'instructor' not in mapping:
+            raise ValueError(f'{source}: missing instructor header')
+        return mapping, row_number + 1
+    return None, None
+
+
 def parse_grade_source(path, source, term_code):
-    """Parse one raw report. Combined sections must identify each row's campus."""
+    """Normalize known university grade-report layouts without editing the input."""
     if source not in SOURCE_NAMES:
         raise ValueError(f'Unknown grade source: {source}')
-    # Reports can contain a variable number of title/header rows, including
-    # repeated headings partway through the file. Read all rows first.
-    raw = pd.read_csv(path, header=None, dtype=str).dropna(how='all')
+    raw = _read_grade_table(path)
     if raw.empty:
         raise ValueError(f'{source}: no grade rows found')
 
-    count_col = 6 if source == 'combined_sections' else 5
-    if raw.shape[1] <= count_col:
-        raise ValueError(f'{source}: expected a student-count column at index {count_col}')
-
-    # Only remove unmistakable report/header rows. Never silently discard a
-    # malformed student-count value from an otherwise valid-looking data row.
-    normalized = raw.fillna('').astype(str).apply(lambda col: col.str.strip().str.lower())
-    header_terms = ('instructor name', 'course number', 'section number',
-                    'total students', 'department', 'course title',
-                    'student count', 'course code')
-    is_header = normalized.apply(
-        lambda col: col.isin(header_terms), axis=0
-    ).any(axis=1)
-    numeric_counts = pd.to_numeric(
-        raw.iloc[:, count_col].astype(str).str.strip().str.replace(',', '', regex=False),
-        errors='coerce',
-    )
-    data_candidates = raw.index[numeric_counts.notna() & ~is_header]
-    if len(data_candidates) == 0:
-        raise ValueError(f'{source}: no grade data rows found; check CSV layout')
-    raw = raw.loc[data_candidates[0]:]
-    raw = raw.loc[~is_header.loc[raw.index]].reset_index(drop=True)
-    if raw.empty:
-        raise ValueError(f'{source}: no grade rows found after removing headers')
-    if source == 'courses':
-        df = raw[list(COURSE_COLUMNS)].rename(columns=COURSE_COLUMNS).copy()
-    else:
-        if source == 'combined_sections':
-            # Supported combined layout: campus as first column, followed by
-            # the same 27-column section report layout used for male/female.
-            first = raw.iloc[:, 0].fillna('').str.strip().str.title()
-            if not first.isin(['Male', 'Female']).all():
-                raise ValueError('Combined Sections CSV must have Male/Female campus in the first column of each data row, followed by the usual section columns')
-            df = raw[[i + 1 for i in SECTION_COLUMNS]].copy()
-            df.columns = list(SECTION_COLUMNS.values())
-            df['campus'] = first.to_numpy()
+    mapping, start = _detect_grade_columns(raw, source)
+    if mapping is None:
+        # Backward-compatible fallback for headerless legacy exports.
+        if source == 'courses':
+            mapping = {name: index for index, name in COURSE_COLUMNS.items()}
+        elif source == 'combined_sections':
+            mapping = {name: index + 1 for index, name in SECTION_COLUMNS.items()}
+            mapping['campus'] = 0
         else:
-            df = raw[list(SECTION_COLUMNS)].rename(columns=SECTION_COLUMNS).copy()
-            df['campus'] = source.title()
-    result = clean_data(df, term_code)
+            mapping = {name: index for index, name in SECTION_COLUMNS.items()}
+        start = 0
+
+    if max(mapping.values()) >= raw.shape[1]:
+        raise ValueError(f'{source}: missing required grade columns')
+    rows = raw.iloc[start:].copy().reset_index(drop=True)
+    normalized = rows.fillna('').astype(str).apply(lambda col: col.str.strip())
+    selected = pd.DataFrame({field: normalized.iloc[:, idx] for field, idx in mapping.items()})
+
+    # A course record has a subject code and course number. Ignore report
+    # titles, repeated headings, page footers, and blank subheader rows.
+    subject = selected['department'].str.upper()
+    number = selected['course_number']
+    looks_like_course = subject.str.fullmatch(r'[A-Z]{2,8}', na=False) & number.str.fullmatch(r'\d{3,5}(?:\.0)?', na=False)
+    selected = selected.loc[looks_like_course].copy()
+    if selected.empty:
+        raise ValueError(f'{source}: no recognizable course records found; check report headers')
+
+    # A valid-looking course with invalid counts must raise, not disappear.
+    for field in ['total_students', *GRADES, 'passing_count', 'withdraw_count']:
+        if field == 'P':
+            selected[field] = selected[field].replace('', '0')
+        selected[field] = selected[field].str.replace(',', '', regex=False)
+    invalid = pd.to_numeric(selected['total_students'], errors='coerce').isna()
+    if invalid.any():
+        raise ValueError(f'{source}: invalid student counts in {invalid.sum()} course rows')
+    if source in ('male', 'female'):
+        selected['campus'] = source.title()
+    else:
+        selected['campus'] = selected['campus'].str.title()
+        if not selected['campus'].isin(['Male', 'Female']).all():
+            raise ValueError(f'{source}: course records must identify Male/Female campus')
+    if source == 'courses':
+        selected['instructor'] = selected.get('instructor', '')
+    result = clean_data(selected, term_code)
     if result.empty:
         raise ValueError(f'{source}: no valid grade rows found')
-    if source == 'courses' and not result['campus'].isin(['Male', 'Female']).all():
-        raise ValueError('Courses CSV must identify Male/Female campus for every row')
     return result
 
 

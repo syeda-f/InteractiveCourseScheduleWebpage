@@ -699,9 +699,14 @@ export default function App() {
   const [courses, setCourses] = useState<ScheduleCourse[]>(() => recalculateConflicts(initialCourses));
   const [exams, setExams] = useState<Exam[]>(initialExams);
   const [scheduleSemesters, setScheduleSemesters] = useState<ScheduleSemesterEntry[]>([]);
-  const [scheduleSemester, setScheduleSemester] = useState<string>(() => window.localStorage.getItem(SCHEDULE_SEMESTER_KEY) ?? "");
+  const [scheduleSemester, setScheduleSemester] = useState<string>("");
   const [scheduleLoadError, setScheduleLoadError] = useState("");
   const scheduleLoadId = useRef(0);
+  useEffect(() => {
+    try {
+      setScheduleSemester(window.localStorage.getItem(SCHEDULE_SEMESTER_KEY) ?? "");
+    } catch { /* Storage may be unavailable. */ }
+  }, []);
   const selectScheduleSemester = (semester: string) => {
     setScheduleSemester(semester);
     window.localStorage.setItem(SCHEDULE_SEMESTER_KEY, semester);
@@ -751,14 +756,21 @@ export default function App() {
   const [numericCodes, setNumericCodes] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [showConflicts, setShowConflicts] = useState(true);
-  const [mergeCrossListed, setMergeCrossListed] = useState<boolean>(() => {
-    try { return window.localStorage.getItem("gradeAnalysis.crossListedMerged") === "true"; }
-    catch { return false; }
-  });
+  // Keep the first server render and client render identical.
+  const [mergeCrossListed, setMergeCrossListed] = useState<boolean>(false);
+  const [crossListedPreferenceLoaded, setCrossListedPreferenceLoaded] = useState(false);
   useEffect(() => {
+    try {
+      setMergeCrossListed(window.localStorage.getItem("gradeAnalysis.crossListedMerged") === "true");
+    } catch { /* Storage may be disabled. */ }
+    setCrossListedPreferenceLoaded(true);
+  }, []);
+  useEffect(() => {
+    // Do not overwrite the saved preference before reading it on mount.
+    if (!crossListedPreferenceLoaded) return;
     try { window.localStorage.setItem("gradeAnalysis.crossListedMerged", String(mergeCrossListed)); }
     catch { /* Storage may be disabled. */ }
-  }, [mergeCrossListed]);
+  }, [mergeCrossListed, crossListedPreferenceLoaded]);
   useEffect(() => {
     setPrefixes([]);
     setNumericCodes([]);
