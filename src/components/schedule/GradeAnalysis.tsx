@@ -619,24 +619,41 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   };
 
   const semesterOptions = useMemo(() => [...new Set([...gradeRecords, ...courseGradeRecords].map((record) => record.semester))].sort(), [gradeRecords, courseGradeRecords]);
-  const courseOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase())).map((record) => record.course))]
-    .map((course) => {
-      const records = gradeRecords.filter((record) => record.course === course);
-      return {
-        value: course,
-        course,
-        title: [...new Set(records.map((record) => record.title))].join(" / "),
-        department: records[0].department,
-      };
-    })
-    .sort((a, b) => a.course.localeCompare(b.course)), [filters.semesters, gradeRecords]);
+  // Course options depend on the selected instructor, not the other way around.
+  // This uses section-level records so an instructor is matched to courses they
+  // actually taught in the selected semester(s), campus and department.
+  const courseOptions = useMemo(() => {
+    const matching = gradeRecords.filter((record) =>
+      filters.semesters.includes(record.semester) &&
+      CCES_DEPARTMENTS.has(record.department.toUpperCase()) &&
+      (filters.department === "All" || record.department.toUpperCase() === filters.department) &&
+      (filters.campus === "All" || record.campus.startsWith(filters.campus)) &&
+      (filters.instructor === "All" || record.instructor === filters.instructor)
+    );
+    const byCourse = new Map<string, typeof matching>();
+    for (const record of matching) {
+      const group = byCourse.get(record.course) ?? [];
+      group.push(record);
+      byCourse.set(record.course, group);
+    }
+    return [...byCourse.entries()].map(([course, records]) => ({
+      value: course,
+      course,
+      title: [...new Set(records.map((record) => record.title))].join(" / "),
+      department: records[0].department,
+    })).sort((a, b) => a.course.localeCompare(b.course));
+  }, [filters.semesters, filters.department, filters.campus, filters.instructor, gradeRecords]);
+
   const departmentOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester)).map((record) => record.department.toUpperCase()).filter((department) => CCES_DEPARTMENTS.has(department)))].sort(), [filters.semesters, gradeRecords]);
 
+  // Do not constrain instructor choices by the currently selected course:
+  // otherwise users cannot switch instructors and discover their courses.
   const instructorOptions = useMemo(() => [...new Set(gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
-    (filters.department === "All" || item.department === filters.department) &&
-    (filters.course === "All" || item.course === filters.course)
-  ).map((item) => item.instructor))].sort(), [filters.course, filters.department, filters.semesters, gradeRecords]);
+    CCES_DEPARTMENTS.has(item.department.toUpperCase()) &&
+    (filters.department === "All" || item.department.toUpperCase() === filters.department) &&
+    (filters.campus === "All" || item.campus.startsWith(filters.campus))
+  ).map((item) => item.instructor).filter(Boolean))].sort(), [filters.department, filters.campus, filters.semesters, gradeRecords]);
 
   const availableSections = useMemo(() => gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
@@ -1010,8 +1027,8 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       </div>
       <div className="grade-filter-field"><label>College</label><select value="CCES" disabled><option>CCES</option></select></div>
       <div className="grade-filter-field"><label>Department</label><select value={filters.department} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, department: e.target.value, course: "All", instructor: "All" })); }}><option value="All">All Departments</option>{departmentOptions.map((department) => <option key={department}>{department}</option>)}</select></div>
-      <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, course: e.target.value, instructor: "All" })); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
-      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setFilters((current) => ({ ...current, instructor: e.target.value })); }}><option value="All">All Instructors</option>{filters.instructor !== "All" && !instructorOptions.includes(filters.instructor) && <option>{filters.instructor}</option>}{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, course: e.target.value })); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setSelectedSections([]); setFilters((current) => { const instructor = e.target.value; const eligible = gradeRecords.some((record) => current.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase()) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && (instructor === "All" || record.instructor === instructor) && record.course === current.course); return { ...current, instructor, course: eligible ? current.course : "All" }; }); }}><option value="All">All Instructors</option>{filters.instructor !== "All" && !instructorOptions.includes(filters.instructor) && <option>{filters.instructor}</option>}{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
       <div className="grade-filter-field grade-section-filter">
         <label>Section</label>
         <details>
