@@ -112,6 +112,8 @@ const canonicalCrossListedCodes: Record<string, string> = {
 const officialProfessorNames = Object.values(collegeProfessors).flat();
 const professorNameMap = new Map(officialProfessorNames.map((name) => [name.trim().toLowerCase(), name]));
 const uniformProfessorName = (name: string) => professorNameMap.get(name.trim().toLowerCase()) ?? name.trim();
+const instructorMatches = (recordInstructor: string, selectedInstructor: string) =>
+  selectedInstructor === "All" || recordInstructor.split(/\s+\/\s+/).some((name) => name.trim() === selectedInstructor);
 const uniformGradeRecord = (record: SectionGradeRecord): SectionGradeRecord => ({
   ...record,
   title: canonicalCourseTitle(record.course, record.title),
@@ -628,7 +630,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       CCES_DEPARTMENTS.has(record.department.toUpperCase()) &&
       (filters.department === "All" || record.department.toUpperCase() === filters.department) &&
       (filters.campus === "All" || record.campus.startsWith(filters.campus)) &&
-      (filters.instructor === "All" || record.instructor === filters.instructor)
+      instructorMatches(record.instructor, filters.instructor)
     );
     const byCourse = new Map<string, typeof matching>();
     for (const record of matching) {
@@ -653,13 +655,13 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     CCES_DEPARTMENTS.has(item.department.toUpperCase()) &&
     (filters.department === "All" || item.department.toUpperCase() === filters.department) &&
     (filters.campus === "All" || item.campus.startsWith(filters.campus))
-  ).map((item) => item.instructor).filter(Boolean))].sort(), [filters.department, filters.campus, filters.semesters, gradeRecords]);
+  ).flatMap((item) => item.instructor.split(/\s+\/\s+/)).filter(Boolean))].sort(), [filters.department, filters.campus, filters.semesters, gradeRecords]);
 
   const availableSections = useMemo(() => gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
     (filters.department === "All" || item.department === filters.department) &&
     (filters.course === "All" || item.course === filters.course) &&
-    (filters.instructor === "All" || item.instructor === filters.instructor) &&
+    instructorMatches(item.instructor, filters.instructor) &&
     (filters.campus === "All" || item.campus.startsWith(filters.campus))
   ), [filters.campus, filters.course, filters.department, filters.instructor, filters.semesters, gradeRecords]);
 
@@ -711,7 +713,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         record.semester === semester &&
         record.course === filters.course &&
         (filters.department === "All" || record.department === filters.department) &&
-        (filters.instructor === "All" || record.instructor === filters.instructor) &&
+        instructorMatches(record.instructor, filters.instructor) &&
         (filters.campus === "All" || record.campus.startsWith(filters.campus))
       );
       return {
@@ -744,11 +746,12 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   // Prefer the actual uploaded course-grade datasets for course reports.
   // For terms/campuses with section data only, retain section-derived aggregates.
   const uploadedCourseReportRecords = useMemo(() => courseGradeRecords.filter((record) =>
+    filters.instructor === "All" &&
     filters.semesters.includes(record.semester) &&
     (filters.department === "All" || record.department === filters.department) &&
     (filters.course === "All" || record.course === filters.course) &&
     (filters.campus === "All" || record.campus.startsWith(filters.campus))
-  ), [courseGradeRecords, filters.semesters, filters.department, filters.course, filters.campus]);
+  ), [courseGradeRecords, filters.instructor, filters.semesters, filters.department, filters.course, filters.campus]);
   const courseReportRecords = useMemo(() => {
     const groups = new Map<string, ChartSeries>();
     const courseSourceKeys = new Set(uploadedCourseReportRecords.map((r) => `${r.semester}|${r.campus}|${r.course}`));
@@ -765,6 +768,18 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     }
     return [...groups.values()];
   }, [uploadedCourseReportRecords, sections]);
+  // Instructor names come from the filtered section records, since uploaded
+  // course-level aggregates may not contain an instructor assignment.
+  const courseInstructorNames = useMemo(() => {
+    const names = new Map<string, Set<string>>();
+    for (const record of sections) {
+      const courseNames = names.get(record.course) ?? new Set<string>();
+      record.instructor.split(/\s+\/\s+/).map((name) => name.trim()).filter((name) => name && name !== "Unassigned").forEach((name) => courseNames.add(name));
+      names.set(record.course, courseNames);
+    }
+    return new Map([...names.entries()].map(([course, instructors]) => [course, [...instructors].sort().join(", ") || "Not available"]));
+  }, [sections]);
+  const instructorsForCourse = (course: string) => courseInstructorNames.get(course) ?? "Not available";
   const reportRecords = reportMode === "course" ? courseReportRecords : sections;
   const reportPotentiallyEasy = useMemo(() => reportRecords
     .filter((record) => {
@@ -874,12 +889,12 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     `Minimum students per course group: ${minimumStudents}`,
     "",
     `Courses with High Average Performance (${Math.min(reportPotentiallyEasy.length, topCourseCount)})`,
-    ...reportPotentiallyEasy.slice(0, topCourseCount).map((record) => `${record.course} - ${record.title} | ${gradeRangeCount(record, highGradeRange)} of ${record.totalStudents} students (${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%) in ${highGradeRange.join(", ")}`),
+    ...reportPotentiallyEasy.slice(0, topCourseCount).map((record) => `${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course)} | ${gradeRangeCount(record, highGradeRange)} of ${record.totalStudents} students (${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%) in ${highGradeRange.join(", ")}`),
     "",
     `Courses with Low Average Performance (${Math.min(reportPotentiallyDifficult.length, atRiskCourseCount)})`,
     ...reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => {
       const lowGradeCount = gradeRangeCount(record, lowGradeRange);
-      return `${record.course} - ${record.title} | ${lowGradeCount} of ${record.totalStudents} (${percent(lowGradeCount, record).toFixed(1)}%) in ${lowGradeRange.join(", ")} | Passing: ${passingGrades(record)} of ${record.totalStudents} (${passingRate(record).toFixed(1)}%) | Withdrawal: ${record.grades.W} of ${record.totalStudents} (${percent(record.grades.W, record).toFixed(1)}%)`;
+      return `${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course)} | ${lowGradeCount} of ${record.totalStudents} (${percent(lowGradeCount, record).toFixed(1)}%) in ${lowGradeRange.join(", ")} | Passing: ${passingGrades(record)} of ${record.totalStudents} (${passingRate(record).toFixed(1)}%) | Withdrawal: ${record.grades.W} of ${record.totalStudents} (${percent(record.grades.W, record).toFixed(1)}%)`;
     }),
     "",
     "These configurable rules are illustrative and are not official PMU academic standards.",
@@ -964,6 +979,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       Department: record.department,
       Course: record.course,
       Title: record.title,
+      Instructor: instructorsForCourse(record.course),
       Students: record.totalStudents,
       "A/A+ Count": highGrades(record),
       "A/A+ Rate": percent(highGrades(record), record) / 100,
@@ -975,6 +991,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         Department: record.department,
         Course: record.course,
         Title: record.title,
+        Instructor: instructorsForCourse(record.course),
         Students: record.totalStudents,
         "D+ & Below Count": lowGradeCount,
         "D+ & Below Rate": percent(lowGradeCount, record) / 100,
@@ -1028,7 +1045,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       <div className="grade-filter-field"><label>College</label><select value="CCES" disabled><option>CCES</option></select></div>
       <div className="grade-filter-field"><label>Department</label><select value={filters.department} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, department: e.target.value, course: "All", instructor: "All" })); }}><option value="All">All Departments</option>{departmentOptions.map((department) => <option key={department}>{department}</option>)}</select></div>
       <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, course: e.target.value })); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
-      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setSelectedSections([]); setFilters((current) => { const instructor = e.target.value; const eligible = gradeRecords.some((record) => current.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase()) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && (instructor === "All" || record.instructor === instructor) && record.course === current.course); return { ...current, instructor, course: eligible ? current.course : "All" }; }); }}><option value="All">All Instructors</option>{filters.instructor !== "All" && !instructorOptions.includes(filters.instructor) && <option>{filters.instructor}</option>}{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setSelectedSections([]); setFilters((current) => { const instructor = e.target.value; const eligible = gradeRecords.some((record) => current.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase()) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && instructorMatches(record.instructor, instructor) && record.course === current.course); return { ...current, instructor, course: eligible ? current.course : "All" }; }); }}><option value="All">All Instructors</option>{filters.instructor !== "All" && !instructorOptions.includes(filters.instructor) && <option>{filters.instructor}</option>}{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
       <div className="grade-filter-field grade-section-filter">
         <label>Section</label>
         <details>
@@ -1242,13 +1259,13 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       {reportMode === "course" ? <>
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--easy">
         <div className="grade-report-section-heading"><span>02</span><div><h2>Courses with High Average Performance</h2><p>Courses meeting the configured grade-range threshold.</p></div><select value={topCourseCount} onChange={(e) => setTopCourseCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{Math.min(reportPotentiallyEasy.length, topCourseCount)} courses</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Selected Grade Range Outcome</th><th>Grade Distribution</th></tr></thead><tbody>{reportPotentiallyEasy.slice(0, topCourseCount).map((record) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`easy-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} students ({percent(count, record).toFixed(1)}%)</span></td><td className="grade-distribution-summary">{grades.map((grade) => `${gradeLabels[grade as Exclude<Grade, "P">]} ${record.grades[grade]} (${percent(record.grades[grade], record).toFixed(1)}%)`).join(" · ")}</td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Grade Distribution</th></tr></thead><tbody>{reportPotentiallyEasy.slice(0, topCourseCount).map((record) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`easy-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course)}</td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} students ({percent(count, record).toFixed(1)}%)</span></td><td className="grade-distribution-summary">{grades.map((grade) => `${gradeLabels[grade as Exclude<Grade, "P">]} ${record.grades[grade]} (${percent(record.grades[grade], record).toFixed(1)}%)`).join(" · ")}</td></tr>; })}</tbody></table></div>
         {!reportPotentiallyEasy.length && <div className="grade-review-empty"><MiniIcon name="check" /><span><strong>No courses meet the potentially easy rule</strong>Adjust the criteria or broaden the filters to review another selection.</span></div>}
       </section>
 
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--difficult">
         <div className="grade-report-section-heading"><span>03</span><div><h2>Courses with Low Average Performance</h2><p>Courses meeting the configured low-performance grade range.</p></div><select value={atRiskCourseCount} onChange={(e) => setAtRiskCourseCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{Math.min(reportPotentiallyDifficult.length, atRiskCourseCount)} courses</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Selected Grade Range Outcome</th><th>Passing Outcome</th><th>Withdrawal Outcome</th></tr></thead><tbody>{reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => { const lowGradeCount = gradeRangeCount(record, lowGradeRange); const passingCount = passingGrades(record); return <tr key={`difficult-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td><span className="grade-signal grade-signal--difficult">{lowGradeCount} of {record.totalStudents} students ({percent(lowGradeCount, record).toFixed(1)}%)</span></td><td>{passingCount} of {record.totalStudents} ({passingRate(record).toFixed(1)}%)</td><td>{record.grades.W} of {record.totalStudents} ({percent(record.grades.W, record).toFixed(1)}%)</td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Passing Outcome</th><th>Withdrawal Outcome</th></tr></thead><tbody>{reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => { const lowGradeCount = gradeRangeCount(record, lowGradeRange); const passingCount = passingGrades(record); return <tr key={`difficult-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course)}</td><td><span className="grade-signal grade-signal--difficult">{lowGradeCount} of {record.totalStudents} students ({percent(lowGradeCount, record).toFixed(1)}%)</span></td><td>{passingCount} of {record.totalStudents} ({passingRate(record).toFixed(1)}%)</td><td>{record.grades.W} of {record.totalStudents} ({percent(record.grades.W, record).toFixed(1)}%)</td></tr>; })}</tbody></table></div>
         {!reportPotentiallyDifficult.length && <div className="grade-review-empty"><MiniIcon name="check" /><span><strong>No courses meet the potentially difficult rule</strong>Adjust the criteria or broaden the filters to review another selection.</span></div>}
       </section>
 
@@ -1271,16 +1288,16 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       </>}
       {showEmailPanel && <div className="grade-email-backdrop" onMouseDown={() => setShowEmailPanel(false)}>
         <aside className="grade-email-drawer" onMouseDown={(event) => event.stopPropagation()}>
-          <div className="grade-email-head"><div><span>Email delivery</span><h2>Send grade reports</h2><p>Select courses, review one draft per course, then send through Outlook.</p></div><button onClick={() => setShowEmailPanel(false)} aria-label="Close">×</button></div>
+          <div className="grade-email-head"><div><span>Email delivery</span><h2>Send grade reports</h2><p>Select courses and review each email draft here before sending.</p></div><button onClick={() => setShowEmailPanel(false)} aria-label="Close">×</button></div>
           {!reviewEmailDrafts ? <>
             <label className="grade-email-field">Sender<input value={senderEmail} onChange={(event) => setSenderEmail(event.target.value)} /></label>
             <label className="grade-email-field">Department chairs (CC)<textarea value={chairEmails} onChange={(event) => setChairEmails(event.target.value)} rows={3} /></label>
             <div className="grade-email-course-list">{emailReportCourses.map((course) => <label key={course}><input type="checkbox" checked={selectedEmailCourses.includes(course)} onChange={() => setSelectedEmailCourses((current) => current.includes(course) ? current.filter((item) => item !== course) : [...current, course])} /><span><strong>{course}</strong><small>{sections.find((record) => record.course === course)?.title}</small></span></label>)}</div>
             <button className="grade-button grade-button--primary" disabled={!selectedEmailCourses.length} onClick={() => setReviewEmailDrafts(true)}>Review {selectedEmailCourses.length} email {selectedEmailCourses.length === 1 ? "draft" : "drafts"}</button>
           </> : <>
-            <button className="grade-email-back" onClick={() => setReviewEmailDrafts(false)}>Back to course selection</button>
-            <div className="grade-email-drafts">{selectedEmailCourses.map((course) => { const draft = buildCourseEmail(course); return <article key={course}><div><strong>{draft.subject}</strong><small>To: {draft.to.join(", ") || "No directory email found"}</small>{draft.missingRecipients.length > 0 && <small>Missing: {draft.missingRecipients.join(", ")}</small>}<small>CC: {chairEmails}</small></div><pre>{draft.body}</pre>{draft.to.length > 0 && <a target="_blank" rel="noreferrer" href={`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(draft.to.join(";"))}&cc=${encodeURIComponent(chairEmails)}&subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`}>Open Outlook draft</a>}</article>; })}</div>
-            <button className="grade-button grade-button--primary" disabled={sendingEmails || selectedEmailCourses.some((course) => buildCourseEmail(course).missingRecipients.length > 0)} onClick={() => void sendReportEmails()}>{sendingEmails ? "Sending…" : `Send ${selectedEmailCourses.length} emails`}</button>
+            <button className="grade-email-back" onClick={() => setReviewEmailDrafts(false)}>Edit draft settings</button>
+            <div className="grade-email-drafts">{selectedEmailCourses.map((course) => { const draft = buildCourseEmail(course); return <article key={course}><div><strong>{draft.subject}</strong><small>To: {draft.to.join(", ") || "No directory email found"}</small>{draft.missingRecipients.length > 0 && <small>Missing: {draft.missingRecipients.join(", ")}</small>}<small>CC: {chairEmails}</small></div><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{draft.body}</pre></article>; })}</div>
+            <button className="grade-button grade-button--primary" disabled={sendingEmails || selectedEmailCourses.some((course) => buildCourseEmail(course).missingRecipients.length > 0)} onClick={() => void sendReportEmails()}>{sendingEmails ? "Sending…" : `Send ${selectedEmailCourses.length} ${selectedEmailCourses.length === 1 ? "email" : "emails"}`}</button>
           </>}
         </aside>
       </div>}
