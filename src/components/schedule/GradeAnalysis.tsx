@@ -24,10 +24,11 @@ const sectionColors = ["#2E78A4", "#D85E9C"];
 const semesterColors = ["#4055D6", "#E67E3F", "#258C70", "#A04B8B", "#C44545", "#2E78A4", "#8A6A2F", "#5C6BC0"];
 const CCES_DEPARTMENTS = new Set(["ITAP", "COEN", "COSC", "SOEN", "AINT", "CSEC", "GEIT"]);
 const semesterLabel = (code: string) => {
+  // Preserve the exact six-digit semester code used in imported filenames.
   const match = /^(\d{4})(10|20|30)$/.exec(code.trim());
   if (!match) return code;
-  const academicYear = Number(match[1]);
-  return match[2] === "10" ? `FALL ${academicYear}` : match[2] === "20" ? `SPRING ${academicYear}` : `SUMMER ${academicYear}`;
+  const season = match[2] === "10" ? "Fall" : match[2] === "20" ? "Spring" : "Summer";
+  return `${code} (${season})`;
 };
 const gradeLabels: Record<Exclude<Grade, "P">, string> = {
   "A+": "A+",
@@ -648,14 +649,17 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
 
   const departmentOptions = useMemo(() => [...new Set(gradeRecords.filter((record) => filters.semesters.includes(record.semester)).map((record) => record.department.toUpperCase()).filter((department) => CCES_DEPARTMENTS.has(department)))].sort(), [filters.semesters, gradeRecords]);
 
-  // Do not constrain instructor choices by the currently selected course:
-  // otherwise users cannot switch instructors and discover their courses.
+  // Cascading filters: semester/campus -> department -> course -> instructor.
+  // When a course is selected, show only instructors who taught that course.
+  // When all courses are selected, show instructors teaching any course in
+  // the chosen department. The instructor can still be selected first.
   const instructorOptions = useMemo(() => [...new Set(gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
     CCES_DEPARTMENTS.has(item.department.toUpperCase()) &&
     (filters.department === "All" || item.department.toUpperCase() === filters.department) &&
+    (filters.course === "All" || item.course === filters.course) &&
     (filters.campus === "All" || item.campus.startsWith(filters.campus))
-  ).flatMap((item) => item.instructor.split(/\s+\/\s+/)).filter(Boolean))].sort(), [filters.department, filters.campus, filters.semesters, gradeRecords]);
+  ).flatMap((item) => item.instructor.split(/\s+\/\s+/)).map((name) => name.trim()).filter(Boolean))].sort(), [filters.department, filters.course, filters.campus, filters.semesters, gradeRecords]);
 
   const availableSections = useMemo(() => gradeRecords.filter((item) =>
     filters.semesters.includes(item.semester) &&
@@ -705,13 +709,13 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     .filter((group) => group.series.length), [chartSeries]);
   const maxCount = Math.max(1, ...grades.map((grade) => chartSeries.reduce((sum, section) => sum + section.grades[grade], 0)));
   const maxPercentage = Math.max(10, Math.min(100, Math.ceil(Math.max(...grades.map((grade) => studentTotal ? chartSeries.reduce((sum, section) => sum + section.grades[grade], 0) / studentTotal * 100 : 0), 0) / 10) * 10));
-  const comparisonEnabled = filters.semesters.length >= 2 && filters.course !== "All";
+  const comparisonEnabled = filters.semesters.length >= 2 && (filters.course !== "All" || filters.instructor !== "All");
   const semesterComparison = useMemo<SemesterComparisonRecord[]>(() => {
     if (!comparisonEnabled) return [];
     return semesterOptions.filter((semester) => filters.semesters.includes(semester)).map((semester) => {
       const records = gradeRecords.filter((record) =>
         record.semester === semester &&
-        record.course === filters.course &&
+        (filters.course === "All" || record.course === filters.course) &&
         (filters.department === "All" || record.department === filters.department) &&
         instructorMatches(record.instructor, filters.instructor) &&
         (filters.campus === "All" || record.campus.startsWith(filters.campus))
@@ -757,7 +761,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     const courseSourceKeys = new Set(uploadedCourseReportRecords.map((r) => `${r.semester}|${r.campus}|${r.course}`));
     const sectionFallback = sections.filter((r) => !courseSourceKeys.has(`${r.semester}|${r.campus}|${r.course}`));
     for (const record of [...uploadedCourseReportRecords, ...sectionFallback]) {
-      const key = record.course;
+      const key = `${record.semester}|${record.course}`;
       const previous = groups.get(key);
       if (previous) {
         previous.totalStudents += record.totalStudents;
@@ -773,13 +777,14 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
   const courseInstructorNames = useMemo(() => {
     const names = new Map<string, Set<string>>();
     for (const record of sections) {
-      const courseNames = names.get(record.course) ?? new Set<string>();
+      const key = `${record.semester}|${record.course}`;
+      const courseNames = names.get(key) ?? new Set<string>();
       record.instructor.split(/\s+\/\s+/).map((name) => name.trim()).filter((name) => name && name !== "Unassigned").forEach((name) => courseNames.add(name));
-      names.set(record.course, courseNames);
+      names.set(key, courseNames);
     }
     return new Map([...names.entries()].map(([course, instructors]) => [course, [...instructors].sort().join(", ") || "Not available"]));
   }, [sections]);
-  const instructorsForCourse = (course: string) => courseInstructorNames.get(course) ?? "Not available";
+  const instructorsForCourse = (course: string, semester: string) => courseInstructorNames.get(`${semester}|${course}`) ?? "Not available";
   const reportRecords = reportMode === "course" ? courseReportRecords : sections;
   const reportPotentiallyEasy = useMemo(() => reportRecords
     .filter((record) => {
@@ -797,7 +802,10 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     .sort((a, b) => percent(gradeRangeCount(b, lowGradeRange), b) - percent(gradeRangeCount(a, lowGradeRange), a)), [lowGradeRange, minimumStudents, reportRecords, riskThreshold, riskType]);
   const allNotableSectionDifferences = useMemo(() => {
     const grouped = new Map<string, SectionGradeRecord[]>();
-    sections.forEach((record) => grouped.set(record.course, [...(grouped.get(record.course) ?? []), record]));
+    sections.forEach((record) => {
+      const key = `${record.semester}|${record.course}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), record]);
+    });
     return [...grouped.entries()].flatMap(([course, records]) => {
       if (records.length < 2) return [];
       const measures = [
@@ -806,7 +814,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       ];
       return measures.map((measure) => {
         const ranked = records.map((record) => ({ record, rate: percent(measure.count(record), record) })).sort((a, b) => b.rate - a.rate);
-        return { course, title: records[0].title, measure: measure.label, highest: ranked[0], lowest: ranked[ranked.length - 1], difference: ranked[0].rate - ranked[ranked.length - 1].rate };
+        return { course: records[0].course, semester: records[0].semester, title: records[0].title, measure: measure.label, highest: ranked[0], lowest: ranked[ranked.length - 1], difference: ranked[0].rate - ranked[ranked.length - 1].rate };
       }).filter((item) => item.difference >= variationThreshold);
     }).sort((a, b) => b.difference - a.difference);
   }, [sections, variationThreshold]);
@@ -889,12 +897,12 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     `Minimum students per course group: ${minimumStudents}`,
     "",
     `Courses with High Average Performance (${Math.min(reportPotentiallyEasy.length, topCourseCount)})`,
-    ...reportPotentiallyEasy.slice(0, topCourseCount).map((record) => `${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course)} | ${gradeRangeCount(record, highGradeRange)} of ${record.totalStudents} students (${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%) in ${highGradeRange.join(", ")}`),
+    ...reportPotentiallyEasy.slice(0, topCourseCount).map((record) => `${semesterLabel(record.semester)} | ${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course, record.semester)} | ${gradeRangeCount(record, highGradeRange)} of ${record.totalStudents} students (${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%) in ${highGradeRange.join(", ")}`),
     "",
     `Courses with Low Average Performance (${Math.min(reportPotentiallyDifficult.length, atRiskCourseCount)})`,
     ...reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => {
       const lowGradeCount = gradeRangeCount(record, lowGradeRange);
-      return `${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course)} | ${lowGradeCount} of ${record.totalStudents} (${percent(lowGradeCount, record).toFixed(1)}%) in ${lowGradeRange.join(", ")} | Passing: ${passingGrades(record)} of ${record.totalStudents} (${passingRate(record).toFixed(1)}%) | Withdrawal: ${record.grades.W} of ${record.totalStudents} (${percent(record.grades.W, record).toFixed(1)}%)`;
+      return `${semesterLabel(record.semester)} | ${record.course} - ${record.title} | Instructor: ${instructorsForCourse(record.course, record.semester)} | ${lowGradeCount} of ${record.totalStudents} (${percent(lowGradeCount, record).toFixed(1)}%) in ${lowGradeRange.join(", ")} | Passing: ${passingGrades(record)} of ${record.totalStudents} (${passingRate(record).toFixed(1)}%) | Withdrawal: ${record.grades.W} of ${record.totalStudents} (${percent(record.grades.W, record).toFixed(1)}%) | Grade Distribution: ${grades.map((grade) => `${grade}: ${record.grades[grade]}`).join(", ")}`;
     }),
     "",
     "These configurable rules are illustrative and are not official PMU academic standards.",
@@ -906,14 +914,14 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     `Filters: Semesters ${selectedSemesterLabels}; Department ${filters.department}; Course ${filters.course}; Instructor ${filters.instructor}; Campus ${filters.campus}; Sections ${selectedSections.length ? selectedSections.length : "All"}`,
     "",
     `Sections with High Average Performance (${topPerformingSections.length})`,
-    ...topPerformingSections.map((record, index) => `${index + 1}. ${record.course} - ${record.title} | Section ${record.section} | ${record.instructor} | ${record.totalStudents} students | Selected range ${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%`),
+    ...topPerformingSections.map((record, index) => `${index + 1}. ${semesterLabel(record.semester)} | ${record.course} - ${record.title} | Section ${record.section} | ${record.instructor} | ${record.totalStudents} students | Selected range ${percent(gradeRangeCount(record, highGradeRange), record).toFixed(1)}%`),
     "",
     `Sections with Low Average Performance (${atRiskSections.length})`,
-    ...atRiskSections.map((record, index) => `${index + 1}. ${record.course} - ${record.title} | Section ${record.section} | ${record.instructor} | ${record.totalStudents} students | Selected range ${percent(gradeRangeCount(record, lowGradeRange), record).toFixed(1)}%`),
+    ...atRiskSections.map((record, index) => `${index + 1}. ${semesterLabel(record.semester)} | ${record.course} - ${record.title} | Section ${record.section} | ${record.instructor} | ${record.totalStudents} students | Selected range ${percent(gradeRangeCount(record, lowGradeRange), record).toFixed(1)}%`),
     "",
     "Variation measures: Combined A+/A and Combined D+ & Below",
     `Section Grade Variation Analysis >= ${variationThreshold} percentage points (${notableSectionDifferences.length})`,
-    ...notableSectionDifferences.map((item) => `${item.course} - ${item.title} | ${item.measure}: ${item.difference.toFixed(1)} pp | Section ${item.highest.record.section} (${item.highest.record.campus}, ${item.highest.record.totalStudents} students) ${item.highest.rate.toFixed(1)}% vs Section ${item.lowest.record.section} (${item.lowest.record.campus}, ${item.lowest.record.totalStudents} students) ${item.lowest.rate.toFixed(1)}%`),
+    ...notableSectionDifferences.map((item) => `${semesterLabel(item.semester)} | ${item.course} - ${item.title} | ${item.measure}: ${item.difference.toFixed(1)} pp | Section ${item.highest.record.section} (${item.highest.record.campus}, ${item.highest.record.totalStudents} students) ${item.highest.rate.toFixed(1)}% vs Section ${item.lowest.record.section} (${item.lowest.record.campus}, ${item.lowest.record.totalStudents} students) ${item.lowest.rate.toFixed(1)}%`),
   ];
   const reportLines = reportMode === "course" ? courseReportLines : sectionReportLines;
 
@@ -940,6 +948,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
     if (reportMode === "section") {
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(topPerformingSections.map((record, index) => ({
         Rank: index + 1,
+        Semester: semesterLabel(record.semester),
         Course: record.course,
         "Course Name": record.title,
         Section: record.section,
@@ -950,6 +959,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       }))), "Top Sections");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(atRiskSections.map((record, index) => ({
         Rank: index + 1,
+        Semester: semesterLabel(record.semester),
         Course: record.course,
         "Course Name": record.title,
         Section: record.section,
@@ -959,6 +969,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         "D+ & Below Rate": percent(record.grades["D+"] + record.grades["D&Below"], record) / 100,
       }))), "At Risk Sections");
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(notableSectionDifferences.map((item) => ({
+        Semester: semesterLabel(item.semester),
         Course: item.course,
         "Course Name": item.title,
         "Grade Measure": item.measure,
@@ -976,10 +987,11 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       return;
     }
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reportPotentiallyEasy.map((record) => ({
+      Semester: semesterLabel(record.semester),
       Department: record.department,
       Course: record.course,
       Title: record.title,
-      Instructor: instructorsForCourse(record.course),
+      Instructor: instructorsForCourse(record.course, record.semester),
       Students: record.totalStudents,
       "A/A+ Count": highGrades(record),
       "A/A+ Rate": percent(highGrades(record), record) / 100,
@@ -991,12 +1003,13 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         Department: record.department,
         Course: record.course,
         Title: record.title,
-        Instructor: instructorsForCourse(record.course),
+        Instructor: instructorsForCourse(record.course, record.semester),
         Students: record.totalStudents,
         "D+ & Below Count": lowGradeCount,
         "D+ & Below Rate": percent(lowGradeCount, record) / 100,
         "Passing Rate": passingRate(record) / 100,
         "Withdrawal Rate": percent(record.grades.W, record) / 100,
+        ...record.grades,
       };
     })), "Low Performance");
     XLSX.writeFileXLSX(workbook, "PMU_CCES_Course_Difficulty_Ease_Report.xlsx");
@@ -1016,6 +1029,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       semesters,
       course: (() => {
         if (courseAvailable && current.course !== "All") return current.course;
+        if (current.instructor !== "All") return "All";
         if (semesters.length < 2) return "All";
         const counts = new Map<string, Set<string>>();
         gradeRecords.forEach((record) => {
@@ -1025,7 +1039,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
         });
         return [...counts.entries()].filter(([, terms]) => terms.size >= 2).map(([course]) => course).sort()[0] ?? "All";
       })(),
-      instructor: "All",
+      instructor: current.instructor,
       mode: semesters.length >= 2 && current.semesters.length < 2 ? "Percentage" : current.mode,
     }));
   };
@@ -1044,8 +1058,8 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       </div>
       <div className="grade-filter-field"><label>College</label><select value="CCES" disabled><option>CCES</option></select></div>
       <div className="grade-filter-field"><label>Department</label><select value={filters.department} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, department: e.target.value, course: "All", instructor: "All" })); }}><option value="All">All Departments</option>{departmentOptions.map((department) => <option key={department}>{department}</option>)}</select></div>
-      <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => ({ ...current, course: e.target.value })); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
-      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setSelectedSections([]); setFilters((current) => { const instructor = e.target.value; const eligible = gradeRecords.some((record) => current.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase()) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && instructorMatches(record.instructor, instructor) && record.course === current.course); return { ...current, instructor, course: eligible ? current.course : "All" }; }); }}><option value="All">All Instructors</option>{filters.instructor !== "All" && !instructorOptions.includes(filters.instructor) && <option>{filters.instructor}</option>}{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Course</label><select value={filters.course} onChange={(e) => { setSelectedSections([]); setReportGenerated(false); setFilters((current) => { const course = e.target.value; const instructorStillTeachesCourse = current.instructor === "All" || gradeRecords.some((record) => current.semesters.includes(record.semester) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && (course === "All" || record.course === course) && instructorMatches(record.instructor, current.instructor)); return { ...current, course, instructor: instructorStillTeachesCourse ? current.instructor : "All" }; }); }}><option value="All">All Courses</option>{courseOptions.filter((option) => filters.department === "All" || option.department === filters.department || option.value === filters.course).map((option) => <option key={option.value} value={option.value}>{option.course} — {option.title}</option>)}</select></div>
+      <div className="grade-filter-field"><label>Instructor</label><select value={filters.instructor} onChange={(e) => { setReportGenerated(false); setSelectedSections([]); setFilters((current) => { const instructor = e.target.value; const eligible = gradeRecords.some((record) => current.semesters.includes(record.semester) && CCES_DEPARTMENTS.has(record.department.toUpperCase()) && (current.department === "All" || record.department.toUpperCase() === current.department) && (current.campus === "All" || record.campus.startsWith(current.campus)) && instructorMatches(record.instructor, instructor) && record.course === current.course); return { ...current, instructor, course: eligible ? current.course : "All" }; }); }}><option value="All">All Instructors</option>{instructorOptions.map((instructor) => <option key={instructor}>{instructor}</option>)}</select></div>
       <div className="grade-filter-field grade-section-filter">
         <label>Section</label>
         <details>
@@ -1117,7 +1131,7 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
 
       <section className="grade-panel grade-chart-card">
         <div className="grade-card-heading">
-          <div><h2>{comparisonEnabled ? `${filters.course} Grade Distribution Across Semesters` : "Grade Distribution Across Letter Grades"}</h2>{comparisonEnabled && <p>All matching sections are aggregated within each semester before percentages are calculated.</p>}</div>
+          <div><h2>{comparisonEnabled ? `${filters.course !== "All" ? filters.course : filters.instructor} Grade Distribution Across Semesters` : "Grade Distribution Across Letter Grades"}</h2>{comparisonEnabled && <p>All matching sections are aggregated within each semester before percentages are calculated.</p>}</div>
           <div className="grade-chart-actions">
             {comparisonEnabled && <details className="grade-comparison-grade-filter">
               <summary>{comparisonGrades.length} grade categories</summary>
@@ -1129,10 +1143,10 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
             <div className="grade-chart-toggles"><div className="grade-segment">{["All", "Male", "Female"].map((campus) => <button className={filters.campus === campus ? "active" : ""} onClick={() => { setReportGenerated(false); setFilters((current) => ({ ...current, campus })); }} key={campus}>{campus}</button>)}</div><MetricToggle mode={filters.mode} onChange={(mode) => setFilters((current) => ({ ...current, mode }))} /></div>
           </div>
         </div>
-        {filters.semesters.length >= 2 && !comparisonEnabled && <p role="status">Choose a course available in the selected semesters to display its comparison line chart. If no course is shared, import the missing semester's course data.</p>}
+        {filters.semesters.length >= 2 && !comparisonEnabled && <p role="status">Choose a course or instructor to compare grade distributions across the selected semesters.</p>}
         {comparisonEnabled ? <>
           <div className="grade-semester-legend" aria-label="Selected grade categories">{comparisonGrades.map((grade) => <span key={grade}><i style={{ background: gradeColors[grades.indexOf(grade)] }} /><b>{comparisonGradeLabel(grade)}</b></span>)}</div>
-          <SemesterComparisonChart data={semesterComparison} mode={filters.mode} selectedGrades={comparisonGrades} course={filters.course} />
+          <SemesterComparisonChart data={semesterComparison} mode={filters.mode} selectedGrades={comparisonGrades} course={filters.course !== "All" ? filters.course : filters.instructor} />
         </> : <>
           <div className="grade-chart-legend grade-chart-legend--single-line">{chartSeries.map((section) => <span key={chartSeriesKey(section)}><i style={{ background: chartSeriesColor(section) }} /><b>{section.course} · Sec {section.section}</b></span>)}</div>
           <div className="grade-chart-wrap">
@@ -1212,14 +1226,59 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
           ))}
         </div>
       </section>
-      <div className="grade-report-filter-row">{renderFilterControls()}</div>
+      <div className="grade-report-filter-row grade-report-filter-row--responsive">
+        <style>{`
+          .grade-report-filter-row--responsive { width: 100%; min-width: 0; max-width: 100%; overflow: visible; }
+          .grade-report-filter-row--responsive .grade-filters {
+            display: grid !important;
+            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box;
+            gap: 14px !important;
+            overflow: visible !important;
+          }
+          .grade-report-filter-row--responsive .grade-filter-field,
+          .grade-report-filter-row--responsive .grade-filter-actions {
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            box-sizing: border-box;
+          }
+          .grade-report-filter-row--responsive select,
+          .grade-report-filter-row--responsive details,
+          .grade-report-filter-row--responsive summary {
+            min-width: 0;
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+          }
+          .grade-report-filter-row--responsive summary {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          @media (max-width: 850px) {
+            .grade-report-filter-row--responsive .grade-filters {
+              grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+          }
+          @media (max-width: 520px) {
+            .grade-report-filter-row--responsive .grade-filters {
+              grid-template-columns: minmax(0, 1fr) !important;
+            }
+          }
+        `}</style>
+        {renderFilterControls()}
+      </div>
       <section className="grade-panel" style={{ padding: "14px 18px" }}>
         <strong>Available uploaded data</strong>
         <p style={{ margin: "8px 0 0" }}>
           {semesterOptions.length ? semesterOptions.map((semester) => {
             const sectionCount = gradeRecords.filter((record) => record.semester === semester).length;
             const courseCount = courseGradeRecords.filter((record) => record.semester === semester).length;
-            return `${semesterLabel(semester)} (${semester}): ${sectionCount} sections, ${courseCount} course records`;
+            return `${semesterLabel(semester)}: ${sectionCount} sections, ${courseCount} course records`;
           }).join(" · ") : "No uploaded semester data is available."}
         </p>
       </section>
@@ -1259,28 +1318,28 @@ export default function GradeAnalysis({ mergeEnabled, onMergeChange }: { mergeEn
       {reportMode === "course" ? <>
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--easy">
         <div className="grade-report-section-heading"><span>02</span><div><h2>Courses with High Average Performance</h2><p>Courses meeting the configured grade-range threshold.</p></div><select value={topCourseCount} onChange={(e) => setTopCourseCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{Math.min(reportPotentiallyEasy.length, topCourseCount)} courses</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Grade Distribution</th></tr></thead><tbody>{reportPotentiallyEasy.slice(0, topCourseCount).map((record) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`easy-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course)}</td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} students ({percent(count, record).toFixed(1)}%)</span></td><td className="grade-distribution-summary">{grades.map((grade) => `${gradeLabels[grade as Exclude<Grade, "P">]} ${record.grades[grade]} (${percent(record.grades[grade], record).toFixed(1)}%)`).join(" · ")}</td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Semester</th><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Grade Distribution</th></tr></thead><tbody>{reportPotentiallyEasy.slice(0, topCourseCount).map((record) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`easy-${record.semester}-${record.course}`}><td><strong>{semesterLabel(record.semester)}</strong></td><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course, record.semester)}</td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} students ({percent(count, record).toFixed(1)}%)</span></td><td className="grade-distribution-summary">{grades.map((grade) => `${gradeLabels[grade as Exclude<Grade, "P">]} ${record.grades[grade]} (${percent(record.grades[grade], record).toFixed(1)}%)`).join(" · ")}</td></tr>; })}</tbody></table></div>
         {!reportPotentiallyEasy.length && <div className="grade-review-empty"><MiniIcon name="check" /><span><strong>No courses meet the potentially easy rule</strong>Adjust the criteria or broaden the filters to review another selection.</span></div>}
       </section>
 
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--difficult">
         <div className="grade-report-section-heading"><span>03</span><div><h2>Courses with Low Average Performance</h2><p>Courses meeting the configured low-performance grade range.</p></div><select value={atRiskCourseCount} onChange={(e) => setAtRiskCourseCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{Math.min(reportPotentiallyDifficult.length, atRiskCourseCount)} courses</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Passing Outcome</th><th>Withdrawal Outcome</th></tr></thead><tbody>{reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => { const lowGradeCount = gradeRangeCount(record, lowGradeRange); const passingCount = passingGrades(record); return <tr key={`difficult-${record.course}`}><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course)}</td><td><span className="grade-signal grade-signal--difficult">{lowGradeCount} of {record.totalStudents} students ({percent(lowGradeCount, record).toFixed(1)}%)</span></td><td>{passingCount} of {record.totalStudents} ({passingRate(record).toFixed(1)}%)</td><td>{record.grades.W} of {record.totalStudents} ({percent(record.grades.W, record).toFixed(1)}%)</td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Semester</th><th>Course</th><th>Instructor</th><th>Selected Grade Range Outcome</th><th>Passing Outcome</th><th>Withdrawal Outcome</th><th>Grade Distribution</th></tr></thead><tbody>{reportPotentiallyDifficult.slice(0, atRiskCourseCount).map((record) => { const lowGradeCount = gradeRangeCount(record, lowGradeRange); const passingCount = passingGrades(record); return <tr key={`difficult-${record.semester}-${record.course}`}><td><strong>{semesterLabel(record.semester)}</strong></td><td><strong>{record.course} — {record.title}</strong></td><td>{instructorsForCourse(record.course, record.semester)}</td><td><span className="grade-signal grade-signal--difficult">{lowGradeCount} of {record.totalStudents} students ({percent(lowGradeCount, record).toFixed(1)}%)</span></td><td>{passingCount} of {record.totalStudents} ({passingRate(record).toFixed(1)}%)</td><td>{record.grades.W} of {record.totalStudents} ({percent(record.grades.W, record).toFixed(1)}%)</td><td className="grade-distribution-summary">{grades.map((grade) => `${gradeLabels[grade as Exclude<Grade, "P">]} ${record.grades[grade]} (${percent(record.grades[grade], record).toFixed(1)}%)`).join(" · ")}</td></tr>; })}</tbody></table></div>
         {!reportPotentiallyDifficult.length && <div className="grade-review-empty"><MiniIcon name="check" /><span><strong>No courses meet the potentially difficult rule</strong>Adjust the criteria or broaden the filters to review another selection.</span></div>}
       </section>
 
       </> : <>
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--easy">
         <div className="grade-report-section-heading"><span>02</span><div><h2>Sections with High Average Performance</h2><p>Sections meeting the configured grade-range threshold.</p></div><select value={topSectionCount} onChange={(e) => setTopSectionCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{topPerformingSections.length} sections</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Rank</th><th>Course / Section</th><th>Course Name</th><th>Instructor</th><th>Students</th><th>Selected Grade Range Outcome</th></tr></thead><tbody>{topPerformingSections.map((record, index) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`top-section-${cohortKey(record)}`}><td><strong>#{index + 1}</strong></td><td><strong>{record.course} · Section {record.section}</strong></td><td>{record.title}</td><td>{record.instructor}</td><td>{record.totalStudents}</td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} ({percent(count, record).toFixed(1)}%)</span></td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Rank</th><th>Semester</th><th>Course / Section</th><th>Course Name</th><th>Instructor</th><th>Students</th><th>Selected Grade Range Outcome</th></tr></thead><tbody>{topPerformingSections.map((record, index) => { const count = gradeRangeCount(record, highGradeRange); return <tr key={`top-section-${cohortKey(record)}`}><td><strong>#{index + 1}</strong></td><td>{semesterLabel(record.semester)}</td><td><strong>{record.course} · Section {record.section}</strong></td><td>{record.title}</td><td>{record.instructor}</td><td>{record.totalStudents}</td><td><span className="grade-signal grade-signal--easy">{count} of {record.totalStudents} ({percent(count, record).toFixed(1)}%)</span></td></tr>; })}</tbody></table></div>
       </section>
       <section className="grade-panel grade-report grade-detailed-summary grade-signal-section--difficult">
         <div className="grade-report-section-heading"><span>03</span><div><h2>Sections with Low Average Performance</h2><p>Sections meeting the configured low-performance grade range.</p></div><select value={atRiskSectionCount} onChange={(e) => setAtRiskSectionCount(Number(e.target.value))}>{[5,10,15,20,9999].map((count) => <option key={count} value={count}>{count === 9999 ? "All" : `Top ${count}`}</option>)}</select><b>{atRiskSections.length} sections</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Rank</th><th>Course / Section</th><th>Course Name</th><th>Instructor</th><th>Students</th><th>Selected Grade Range Outcome</th></tr></thead><tbody>{atRiskSections.map((record, index) => { const lowGrades = gradeRangeCount(record, lowGradeRange); return <tr key={`risk-section-${cohortKey(record)}`}><td><strong>#{index + 1}</strong></td><td><strong>{record.course} · Section {record.section}</strong></td><td>{record.title}</td><td>{record.instructor}</td><td>{record.totalStudents}</td><td><span className="grade-signal grade-signal--difficult">{lowGrades} of {record.totalStudents} ({percent(lowGrades, record).toFixed(1)}%)</span></td></tr>; })}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Rank</th><th>Semester</th><th>Course / Section</th><th>Course Name</th><th>Instructor</th><th>Students</th><th>Selected Grade Range Outcome</th></tr></thead><tbody>{atRiskSections.map((record, index) => { const lowGrades = gradeRangeCount(record, lowGradeRange); return <tr key={`risk-section-${cohortKey(record)}`}><td><strong>#{index + 1}</strong></td><td>{semesterLabel(record.semester)}</td><td><strong>{record.course} · Section {record.section}</strong></td><td>{record.title}</td><td>{record.instructor}</td><td>{record.totalStudents}</td><td><span className="grade-signal grade-signal--difficult">{lowGrades} of {record.totalStudents} ({percent(lowGrades, record).toFixed(1)}%)</span></td></tr>; })}</tbody></table></div>
       </section>
       <section className="grade-panel grade-report grade-detailed-summary">
         <div className="grade-report-section-heading"><span>04</span><div><h2>Section Grade Variation Analysis</h2><p>Combined A+/A and Combined D+ &amp; Below (D+, D, and F) · highest-to-lowest differences of {variationThreshold} percentage points or more.</p></div><b>{notableSectionDifferences.length} findings</b></div>
-        <div className="grade-table-scroll"><table><thead><tr><th>Course</th><th>Course Name</th><th>Grade Measure</th><th>Highest Section</th><th>Lowest Section</th><th>Difference</th></tr></thead><tbody>{notableSectionDifferences.map((item) => <tr key={`${item.course}-${item.measure}`}><td><strong>{item.course}</strong></td><td>{item.title}</td><td><strong>{item.measure}</strong></td><td>Section {item.highest.record.section} · {item.highest.record.campus} · {item.highest.record.totalStudents} students · {item.highest.rate.toFixed(1)}%</td><td>Section {item.lowest.record.section} · {item.lowest.record.campus} · {item.lowest.record.totalStudents} students · {item.lowest.rate.toFixed(1)}%</td><td><span className="grade-gap">{item.difference.toFixed(1)} pp</span></td></tr>)}</tbody></table></div>
+        <div className="grade-table-scroll"><table><thead><tr><th>Semester</th><th>Course</th><th>Course Name</th><th>Grade Measure</th><th>Highest Section</th><th>Lowest Section</th><th>Difference</th></tr></thead><tbody>{notableSectionDifferences.map((item) => <tr key={`${item.semester}-${item.course}-${item.measure}`}><td>{semesterLabel(item.semester)}</td><td><strong>{item.course}</strong></td><td>{item.title}</td><td><strong>{item.measure}</strong></td><td>Section {item.highest.record.section} · {item.highest.record.campus} · {item.highest.record.totalStudents} students · {item.highest.rate.toFixed(1)}%</td><td>Section {item.lowest.record.section} · {item.lowest.record.campus} · {item.lowest.record.totalStudents} students · {item.lowest.rate.toFixed(1)}%</td><td><span className="grade-gap">{item.difference.toFixed(1)} pp</span></td></tr>)}</tbody></table></div>
         {!notableSectionDifferences.length && <div className="grade-review-empty"><MiniIcon name="check" /><span><strong>No notable section variations</strong>No grade measure differs by {variationThreshold} percentage points or more.</span></div>}
       </section>
       </>}

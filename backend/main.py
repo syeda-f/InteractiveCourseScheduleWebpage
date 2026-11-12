@@ -108,22 +108,21 @@ def get_grades(merge: bool = False, record_type: str = "course", semester: Optio
 
 
 def detect_grade_semester(uploads: list[UploadFile]) -> str:
-    """Detect a single university term code from source filenames or report headers."""
+    """Read the semester code exclusively from uploaded filenames, never CSV headers."""
+    pattern = re.compile(r"(?<!\d)(20\d{2}(?:10|20|30))(?!\d)")
     codes = set()
-    # Require an explicit six-digit code, not a guessed year/season mapping.
-    pattern = re.compile(r"(?<!\d)(20\d{4})(?!\d)")
     for upload in uploads:
-        codes.update(pattern.findall(upload.filename or ""))
-        # Raw report header rows precede the grade table (skiprows=3 in ETL).
-        # Inspect only the header, avoiding accidental codes in student data.
-        position = upload.file.tell()
-        upload.file.seek(0)
-        header = upload.file.read(4096).decode("utf-8-sig", errors="replace").splitlines()[:3]
-        upload.file.seek(position)
-        codes.update(pattern.findall("\n".join(header)))
+        filename = upload.filename or ""
+        matches = set(pattern.findall(filename))
+        if len(matches) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Filename {filename!r} must contain exactly one semester code "
+                       "(e.g. 202510, 202520, or 202530). Sheet headers are ignored."
+            )
+        codes.update(matches)
     if len(codes) != 1:
-        reason = "No semester code was found" if not codes else "Conflicting semester codes were found: " + ", ".join(sorted(codes))
-        raise HTTPException(status_code=422, detail=reason + ". Include the same six-digit semester code (such as 202510) in a source filename or report header.")
+        raise HTTPException(status_code=422, detail="Uploaded filenames contain different semester codes")
     return codes.pop()
 
 
@@ -182,17 +181,14 @@ async def import_grades(
     detected = detect_grade_semester(list(uploads.values())) if semester is None else semester
     if not re.fullmatch(r"20\d{4}", detected):
         raise HTTPException(status_code=422, detail="Semester must be a six-digit code beginning with 20")
-    # If semester is explicitly supplied, ensure any embedded codes agree.
+    # Filename is authoritative even if the CSV's internal report title differs.
     if semester is not None:
-        pattern = re.compile(r"(?<!\d)(20\d{4})(?!\d)")
-        for upload in uploads.values():
-            position = upload.file.tell()
-            upload.file.seek(0)
-            header = upload.file.read(4096).decode('utf-8-sig', errors='replace').splitlines()[:3]
-            upload.file.seek(position)
-            codes = set(pattern.findall(upload.filename or '')) | set(pattern.findall('\n'.join(header)))
-            if codes and codes != {semester}:
-                raise HTTPException(status_code=422, detail=f"File {upload.filename} has a different semester code")
+        filename_semester = detect_grade_semester(list(uploads.values()))
+        if filename_semester != semester:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Filename semester {filename_semester} differs from requested semester {semester}"
+            )
     existing = _existing_grade_sources(detected)
     conflicts = sorted(set(uploads).intersection(existing))
     if conflicts and not replace_existing:
