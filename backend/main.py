@@ -4,6 +4,7 @@ from pydantic import BaseModel
 #run from the project root: uvicorn backend.main:app --reload
 
 import json
+import os
 import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,10 +23,19 @@ GRADES_FILE = OUTPUT_DIR / "grades_processed.csv"
 GRADES_DIR = OUTPUT_DIR / "grades"
 
 app = FastAPI(title="Academic Planning Analytics API")
+
+LOCAL_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:8443", "http://127.0.0.1:8443", "http://192.168.1.5:8443",
+    "http://localhost:3000", "http://127.0.0.1:3000",
+]
+# Extra production origins, comma-separated, e.g. ALLOWED_ORIGINS=https://your-project.vercel.app
+EXTRA_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8443", "http://127.0.0.1:8443", "http://192.168.1.5:8443", "http://localhost:3000",
-        "http://127.0.0.1:3000",],
+    allow_origins=LOCAL_ORIGINS + EXTRA_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # Vercel preview URLs; tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
